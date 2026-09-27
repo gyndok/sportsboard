@@ -27,16 +27,40 @@ async function scores(league,date) {
     }catch(err){if(old)return {...old.data,stale:true,error:'Feed unavailable; showing last received scores.'};throw err;}
   })();pending.set(key,task);try{return await task;}finally{pending.delete(key);}
 }
+const detailCache=new Map(), detailPending=new Map();
+async function details(league,id){
+  const key=league+id,old=detailCache.get(key);
+  if(old && Date.now()-old.saved<25000)return old.data;
+  if(detailPending.has(key))return detailPending.get(key);
+  const task=(async()=>{try{
+    const response=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${leagues[league]}/summary?event=${id}`,{signal:AbortSignal.timeout(12000)});
+    if(!response.ok)throw Error('Unavailable');
+    const raw=await response.json();
+    const competition=raw.header?.competitions?.[0];
+    if(!competition)throw Error('Missing game');
+    const data={league,competition,gameInfo:raw.gameInfo,boxscore:raw.boxscore,leaders:raw.leaders,scoringPlays:raw.scoringPlays,updated:new Date().toISOString()};
+    detailCache.set(key,{data,saved:Date.now()});
+    if(detailCache.size>60)detailCache.delete(detailCache.keys().next().value);
+    return data;
+  }catch(error){if(old)return {...old.data,stale:true};throw error;}})();
+  detailPending.set(key,task);try{return await task;}finally{detailPending.delete(key);}
+}
 export function createServer(){return http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://localhost');
   res.setHeader('X-Content-Type-Options','nosniff');
+  if(url.pathname==='/api/game'){
+    res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
+    const league=url.searchParams.get('league'),id=url.searchParams.get('id');
+    if(!Object.hasOwn(leagues,league)||!/^\d{1,15}$/.test(id||'')){res.writeHead(400);return res.end(JSON.stringify({error:'Invalid game'}));}
+    try{res.end(JSON.stringify(await details(league,id)));}catch{res.writeHead(502);res.end(JSON.stringify({error:'Game details are temporarily unavailable. Please retry.'}));}return;
+  }
   if(url.pathname==='/api/scores'){
     res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
     const league=url.searchParams.get('league'),date=url.searchParams.get('date');
     if(!Object.hasOwn(leagues,league) || !/^\d{8}$/.test(date || '')){res.writeHead(400);return res.end(JSON.stringify({error:'Invalid league or date'}));}
     try{res.end(JSON.stringify(await scores(league,date)));}catch{res.writeHead(502);res.end(JSON.stringify({error:'Unable to reach the score feed. Retrying automatically.'}));}return;
   }
-  const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
+  const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
   if(!files[url.pathname]){res.writeHead(404);return res.end('Not found');}
   try{const [file,type]=files[url.pathname];res.setHeader('Content-Type',type);res.end(await readFile(new URL(`./public/${file}`,import.meta.url)));}catch{res.writeHead(500);res.end('Unable to load page');}
 });}

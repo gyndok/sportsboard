@@ -17,3 +17,9 @@ Open a terminal in this directory and run `npm start`, then open http://localhos
 Choose a league, filter live/upcoming/final games, or select a date to view future schedules. Scores refresh every 30 seconds. Times use the browser's local timezone. Game clocks are the latest reported values, not simulated countdowns.
 
 Data comes from ESPN's public scoreboard endpoints. This is an unofficial feed with no availability or latency guarantee; access may change. It is not suitable for time-critical betting. Failed refreshes visibly retain the last successful scores where available. No fabricated or demo games are shown. League offseasons and dates without published schedules display an empty state. Upcoming shows scheduled games on the selected date; choose a future date for later games.
+
+## Game details
+
+Click a game row (or tab to its status button and press Enter) to open its detail window. Football includes quarter scoring, passing/rushing/receiving box scores and scoring plays; baseball includes innings, batting and pitching; basketball includes quarter scoring and player box scores; hockey includes period scoring and skater/goalie statistics. Team comparisons, venue, and broadcasts appear when supplied by the feed. Pregame games show available preview information. Details refresh every 30 seconds, clearly mark stale data, and close with Escape or the Close button. Team stars still toggle favorites without opening details.
+
+Run `npm test` for rendering and endpoint validation tests.
