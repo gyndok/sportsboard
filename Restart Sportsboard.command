@@ -5,6 +5,10 @@ cd "$(dirname "$0")"
 if GIT_TERMINAL_PROMPT=0 git pull --ff-only -q 2>/dev/null; then echo "Up to date with GitHub ($(git log -1 --format='%h %s'))."
 else echo "Couldn't update from GitHub; starting the local copy."; fi
 PORT=8788
+if launchctl print "gui/$(id -u)/com.gyndok.sportsboard" >/dev/null 2>&1; then
+  echo "Restarting the Sportsboard service…"
+  launchctl kickstart -k "gui/$(id -u)/com.gyndok.sportsboard"; sleep 3
+else
 PIDS=$(lsof -ti tcp:$PORT -sTCP:LISTEN)
 if [ -n "$PIDS" ]; then echo "Stopping old server ($PIDS)…"; kill $PIDS; fi
 sleep 3
@@ -14,6 +18,7 @@ else
   NODE=$(command -v node || ls /opt/homebrew/bin/node /usr/local/bin/node 2>/dev/null | head -1)
   PORT=$PORT HOST=0.0.0.0 nohup "$NODE" server.mjs >> log.txt 2>&1 &
   sleep 2
+fi
 fi
 lsof -nP -iTCP:$PORT -sTCP:LISTEN
 echo

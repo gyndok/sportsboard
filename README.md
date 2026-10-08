@@ -28,7 +28,7 @@ Run `npm test` for rendering and endpoint validation tests.
 
 Turns a Mac mini connected to a TV into a multi-game wall, a full-screen scoreboard, or a calm ambient screen, all controlled from a phone.
 
-Start (or restart) the server on port 8788 by double-clicking `Restart Sportsboard.command`. Open `http://<mini-ip>:8788/remote` on your phone; the Terminal window and the remote footer print the address. Sportsboard's header also has a **TV WALL** button.
+Double-click `Install Autostart.command` once: it installs a LaunchAgent (`com.gyndok.sportsboard`) that starts the server on port 8788 at login, pulls the latest code from GitHub first, and restarts it if it stops. `Restart Sportsboard.command` pulls updates and restarts it on demand. Remove autostart with `./"Install Autostart.command" --remove`. Open `http://<mini-ip>:8788/remote` on your phone; the Terminal window and the remote footer print the address. Sportsboard's header also has a **TV WALL** button.
 
 Modes:
 
