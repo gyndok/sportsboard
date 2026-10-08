@@ -1,6 +1,8 @@
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {initWall, handleWall} from './wall.mjs';
+const PORT=Number(process.env.PORT || 8787);
 export const leagues = {NFL:'football/nfl',MLB:'baseball/mlb',NCAAF:'football/college-football',NHL:'hockey/nhl',NBA:'basketball/nba'};
 const cache = new Map();
 const pending = new Map();
@@ -60,8 +62,9 @@ export function createServer(){return http.createServer(async(req,res)=>{
     if(!Object.hasOwn(leagues,league) || !/^\d{8}$/.test(date || '')){res.writeHead(400);return res.end(JSON.stringify({error:'Invalid league or date'}));}
     try{res.end(JSON.stringify(await scores(league,date)));}catch{res.writeHead(502);res.end(JSON.stringify({error:'Unable to reach the score feed. Retrying automatically.'}));}return;
   }
-  const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
+  if(await handleWall(req,res,url,PORT))return;
+  const files={'/remote':['remote.html','text/html'],'/remote.js':['remote.js','text/javascript'],'/calm':['calm.html','text/html'],'/calm.js':['calm.js','text/javascript'],'/sidebar':['sidebar.html','text/html'],'/sidebar.js':['sidebar.js','text/javascript'],'/wall.css':['wall.css','text/css'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
   if(!files[url.pathname]){res.writeHead(404);return res.end('Not found');}
   try{const [file,type]=files[url.pathname];res.setHeader('Content-Type',type);res.end(await readFile(new URL(`./public/${file}`,import.meta.url)));}catch{res.writeHead(500);res.end('Unable to load page');}
 });}
-if(process.argv[1]===fileURLToPath(import.meta.url))createServer().listen(Number(process.env.PORT || 8787),'127.0.0.1',()=>console.log(`Sportsboard ready: http://localhost:${process.env.PORT || 8787}`));
+if(process.argv[1]===fileURLToPath(import.meta.url)){await initWall({port:PORT});createServer().listen(PORT,process.env.HOST||'0.0.0.0',()=>console.log(`Sportsboard ready: http://localhost:${PORT}  ·  TV Wall remote: http://localhost:${PORT}/remote`));}

@@ -6,3 +6,7 @@ dist/
 .env
 .env.*
 *.log
+wall-state.json
+wall-config.json
+log.txt
+*.bak-*
