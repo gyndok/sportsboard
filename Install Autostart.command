@@ -36,6 +36,18 @@ cat > "$PLIST" <<PLIST
 </dict></plist>
 PLIST
 
+# Retire any older Sportsboard LaunchAgent (it would fight this one for port 8788).
+# Its plist is moved to ~/LaunchAgents-paused, not deleted.
+for f in "$HOME/Library/LaunchAgents"/*.plist(N); do
+  [ "$f" = "$PLIST" ] && continue
+  if grep -qiE "sportsboard|server\.mjs" "$f" 2>/dev/null; then
+    L=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$f" 2>/dev/null)
+    echo "Retiring older Sportsboard service: ${L:-$f}"
+    launchctl bootout "$DOMAIN/$L" 2>/dev/null || launchctl unload "$f" 2>/dev/null
+    mkdir -p "$HOME/LaunchAgents-paused" && mv "$f" "$HOME/LaunchAgents-paused/"
+  fi
+done
+
 # Stop a server started by hand so the service can take over port 8788.
 PIDS=$(lsof -ti tcp:8788 -sTCP:LISTEN)
 [ -n "$PIDS" ] && kill $PIDS && sleep 2
