@@ -8,8 +8,11 @@ import {fileURLToPath} from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 
-const CONFIG_FILE = fileURLToPath(new URL('./wall-config.json', import.meta.url));
-const STATE_FILE = fileURLToPath(new URL('./wall-state.json', import.meta.url));
+// Under `npm test` keep state in a temp dir and never touch real windows.
+const TESTING = !!process.env.NODE_TEST_CONTEXT;
+const DATA_DIR = TESTING ? os.tmpdir() : fileURLToPath(new URL('.', import.meta.url));
+const CONFIG_FILE = path.join(DATA_DIR, TESTING ? `wall-config-test-${process.pid}.json` : 'wall-config.json');
+const STATE_FILE = path.join(DATA_DIR, TESTING ? `wall-state-test-${process.pid}.json` : 'wall-state.json');
 const AERIAL_ROOT = '/Library/Application Support/com.apple.idleassetsd/Customer';
 const BROWSER = process.env.WALL_BROWSER || 'Google Chrome';
 
@@ -23,6 +26,7 @@ export const defaultConfig = {
     {id: 'sportsboard', name: 'Sportsboard scores', url: 'local:/'},
     {id: 'custom', name: 'Custom link', url: 'about:blank'}
   ],
+  channels: [], // saved live channels: {id, name, aliases:[...], url} — added from the remote
   sidebarWidth: 0.2,
   titlebar: 28, // points of window title bar tucked out of sight in clean mode
   rotateMinutes: 20,
@@ -42,6 +46,28 @@ export const defaultConfig = {
     {from: '21:00', scenes: ['fireplace']}
   ]
 };
+
+// Networks the score feed reports that live in a streaming app rather than on YouTube TV.
+const STREAMING_NETWORKS = [
+  [/peacock/i, 'peacock'], [/prime|amazon/i, 'prime'], [/apple|mls season pass|friday night baseball/i, 'appletv'],
+  [/paramount/i, 'paramount']
+];
+const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9+]/g, '');
+const fitLayout = n => n <= 1 ? 'single' : n === 2 ? 'side' : n === 3 ? 'main2' : 'grid';
+
+// Turn a feed broadcast string like "FS1 / Peacock" into something playable.
+function resolveBroadcast(broadcast) {
+  const names = String(broadcast || '').split(/\s*[\/,|]\s*/).filter(Boolean);
+  for (const name of names) {
+    const ch = config.channels.find(c => [c.name, ...(c.aliases || [])].some(a => norm(a) === norm(name)));
+    if (ch) return {service: 'youtubetv', link: ch.url, label: ch.name};
+  }
+  for (const name of names) {
+    const hit = STREAMING_NETWORKS.find(([re]) => re.test(name));
+    if (hit) { const svc = config.services.find(x => x.id === hit[1]); if (svc) return {service: svc.id, link: '', label: svc.name}; }
+  }
+  return null;
+}
 
 export const LAYOUTS = {
   single: {name: 'Single', slots: 1},
@@ -196,7 +222,7 @@ function desiredWindows(area) {
 
 async function applyNow() {
   const warnings = [];
-  if (process.platform !== 'darwin') { state.warnings = ['Window control only works on the Mac mini.']; await saveState(); return; }
+  if (process.platform !== 'darwin' || TESTING) { state.warnings = ['Window control only works on the Mac mini.']; await saveState(); return; }
   const clean = state.clean && state.mode !== 'off';
   if (clean !== cleanApplied) {
     try { const errs = await setClean(clean); if (errs.length) warnings.push('Could not auto-hide the Dock/menu bar — allow Terminal to control System Events when macOS asks.'); }
@@ -365,12 +391,48 @@ export async function handleWall(req, res, url, port) {
   }
   try {
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {state: publicState(), services: config.services, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length});
+      send(res, 200, {state: publicState(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length});
     } else if (p === '/api/wall' && req.method === 'POST') {
       mergePatch(await readBody(req));
       const calmOnly = state.mode === 'calm' && state.windows.calm && (state.clean && state.mode !== 'off') === cleanApplied;
       if (!calmOnly) await apply(); else await saveState();
       send(res, 200, {state: publicState(), scene: sceneNow()});
+    } else if (p === '/api/wall/channel' && req.method === 'POST') {
+      const b = await readBody(req);
+      if (b.remove) {
+        config.channels = config.channels.filter(c => c.id !== b.remove);
+      } else {
+        const name = String(b.name || '').trim().slice(0, 30);
+        if (!name) return send(res, 400, {error: 'Give the channel a name, e.g. FS1.'}), true;
+        let link = String(b.url || '').trim();
+        if (!link && b.slot) {
+          const id = state.windows[`slot:${b.slot}`];
+          if (!id) return send(res, 400, {error: 'That screen isn\'t open on the TV right now.'}), true;
+          link = await osa(`return JSON.stringify(chrome.windows.byId(arg).activeTab.url())`, id);
+        }
+        if (!validUrl(link)) return send(res, 400, {error: 'Couldn\'t read a channel link from that screen.'}), true;
+        const aliases = String(b.aliases || '').split(',').map(a => a.trim()).filter(Boolean).slice(0, 8);
+        const id = norm(name).toLowerCase().slice(0, 20) || uid();
+        config.channels = config.channels.filter(c => c.id !== id).concat({id, name, aliases, url: link});
+      }
+      await saveConfig();
+      send(res, 200, {channels: config.channels});
+    } else if (p === '/api/wall/watch' && req.method === 'POST') {
+      const b = await readBody(req);
+      const slotIndex = Number(b.slot);
+      if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 3) return send(res, 400, {error: 'Pick screen 1–4.'}), true;
+      let target = null;
+      if (b.channel) { const ch = config.channels.find(c => c.id === b.channel); if (ch) target = {service: 'youtubetv', link: ch.url, label: ch.name}; }
+      else if (b.broadcast) target = resolveBroadcast(b.broadcast);
+      if (!target) return send(res, 404, {error: `No saved channel for ${String(b.broadcast || 'that').slice(0, 40)}. Tune a screen to it in YouTube TV, then tap 💾 on that screen in the remote.`}), true;
+      while (state.slots.length <= slotIndex) state.slots.push({uid: uid(), service: 'youtubetv', link: ''});
+      if ((LAYOUTS[state.layout]?.slots || 1) <= slotIndex) state.layout = fitLayout(slotIndex + 1);
+      const slot = state.slots[slotIndex];
+      slot.service = target.service; slot.link = target.link;
+      state.mode = 'grid'; state.audio = slot.uid;
+      if (state.solo && state.solo !== slot.uid) state.solo = null;
+      await apply();
+      send(res, 200, {state: publicState(), label: target.label, screen: slotIndex + 1});
     } else if (p === '/api/wall/scene' && req.method === 'POST') {
       const b = await readBody(req);
       if (b.remove) {

@@ -34,6 +34,8 @@ Modes:
 
 - **Game day**: tiles 1–4 Chrome app windows (single, 2 side by side, 3, 2 × 2, 1 big + 2, 1 big + 3). Each screen picks a service (YouTube TV / Sunday Ticket, Peacock, Paramount+, Prime Video, Apple TV, Sportsboard) or a pasted game link. 🔊 picks the one screen with sound, ⤢ fills the screen with one game, and ⬆ promotes a game to the big screen. Layout and sidebar changes move windows without reloading streams.
 - **Scores sidebar**: an optional right-hand column with a clock and live, upcoming and final scores (starred teams first). It scrolls slowly when long.
+- **Channel presets**: put a YouTube TV channel on a screen and tap 💾 on that screen to save it as a button under **My channels** (name it the way the scoreboard shows the network, e.g. `FS1`; add other spellings after commas). Tap a saved channel to send it to any screen.
+- **Watch buttons**: every live or upcoming game on the scoreboard, and in the remote's **Games today** list, shows its network (📺 FS1). Tap it and pick a screen; the game's network is matched to your saved channels (Peacock, Prime, Apple TV and Paramount+ games open that app). The chosen screen gets the sound.
 - **Scoreboard**: Sportsboard full screen.
 - **Calm**: Apple Aerials stored on the Mini (ocean, landscapes, Earth, cities) plus YouTube scenes, rotating by time of day. Pin a scene, toggle the clock or sound, and add YouTube live-cam links from the remote.
 - **Clean screen**: auto-hides the Dock and menu bar, tucks window title bars out of view, blanks window titles and parks the pointer. Turning it off or choosing **Off** restores your Dock and menu bar settings.

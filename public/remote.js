@@ -46,10 +46,14 @@ function render() {
         <button data-act="audio" aria-pressed="${s.audio === slot.uid}" title="Sound from this screen">🔊</button>
         <button data-act="solo" aria-pressed="${s.solo === slot.uid}" title="Fill the screen">⤢</button>
         ${i > 0 ? '<button data-act="promote" title="Make this the main screen">⬆</button>' : ''}
+        ${slot.service === 'youtubetv' && s.mode === 'grid' ? '<button data-act="save" title="Save the channel on this screen as a button">💾</button>' : ''}
       </div>
       <form class="slot-link" data-act="link"><input name="link" value="${esc(slot.link)}" placeholder="Game link (optional)" inputmode="url"><button>Go</button>${slot.link ? '<button type="button" data-act="clear">✕</button>' : ''}</form>
     </li>`).join('');
 
+  const chans = wall.channels || [];
+  $('#channels').innerHTML = chans.length ? chans.map(c => `<span class="scene"><button data-channel="${esc(c.id)}" data-title="${esc(c.name)}">${esc(c.name)}</button><button class="x" data-remove-channel="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">✕</button></span>`).join('')
+    : '<p class="hint">None yet. Put a YouTube TV channel on a screen, then tap 💾 on that screen to save it here.</p>';
   const pinned = s.calm.pinned;
   $('#scenes').innerHTML = `<button data-scene="" aria-pressed="${!pinned}">⟳ Auto by time of day</button>` +
     wall.scenes.map(sc => `<span class="scene"><button data-scene="${sc.id}" aria-pressed="${pinned === sc.id}">${esc(sc.name)}</button>${sc.type !== 'aerial' && sc.id !== 'fireplace' ? `<button class="x" data-remove="${sc.id}" aria-label="Remove ${esc(sc.name)}">✕</button>` : ''}</span>`).join('');
@@ -77,6 +81,13 @@ $('#slots').addEventListener('click', e => {
   if (b.dataset.act === 'audio') patch({audio: uid}, 'Switching sound…');
   if (b.dataset.act === 'solo') patch({solo: s.solo === uid ? null : uid});
   if (b.dataset.act === 'promote') { const i = slots.findIndex(x => x.uid === uid); slots.unshift(...slots.splice(i, 1)); patch({slots, solo: null}); }
+  if (b.dataset.act === 'save') {
+    const name = prompt('Name this channel the way the scoreboard shows it (e.g. FS1, ESPN, FOX).\nAdd other spellings after commas: FOX, FOX 26');
+    if (!name) return;
+    const [first, ...rest] = name.split(',').map(x => x.trim()).filter(Boolean);
+    fetch('/api/wall/channel', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({slot: uid, name: first, aliases: rest.join(',')})})
+      .then(r => r.json().then(d => { $('#status').textContent = r.ok ? `Saved ${first}` : d.error; load(); }));
+  }
   if (b.dataset.act === 'clear') { slots.find(x => x.uid === uid).link = ''; patch({slots}); }
 });
 $('#slots').addEventListener('change', e => {
@@ -108,5 +119,24 @@ $('#add-scene').addEventListener('submit', async e => {
   if (!r.ok) { $('#status').textContent = d.error; return; }
   f.reset(); load();
 });
+
+document.addEventListener('click', async e => {
+  const rm = e.target.closest('[data-remove-channel]'); if (!rm) return;
+  await fetch('/api/wall/channel', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({remove: rm.dataset.removeChannel})});
+  load();
+});
+document.addEventListener('wall-changed', () => setTimeout(load, 300));
+
+const leagues = ['NFL', 'NCAAF', 'MLB', 'NBA', 'NHL'];
+async function loadGames() {
+  const d = new Date(), ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const all = (await Promise.all(leagues.map(l => fetch(`/api/scores?league=${l}&date=${ymd}`).then(r => r.json()).then(x => (x.events || []).map(e => ({...e, league: l}))).catch(() => [])))).flat()
+    .filter(e => e.state !== 'post').sort((a, b) => (a.state === 'in' ? 0 : 1) - (b.state === 'in' ? 0 : 1) || Date.parse(a.date) - Date.parse(b.date));
+  $('#games').innerHTML = all.length ? all.map(e => `<div class="game-row"><span class="gl">${e.state === 'in' ? '<b>LIVE</b>' : new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})} · ${esc(e.league)}</span>
+      <span class="gt">${esc(e.teams.map(t => t.abbr + (e.state === 'in' ? ' ' + t.score : '')).join(' @ '))}</span>
+      ${e.broadcast ? `<button class="watch-chip" data-watch="${esc(e.broadcast)}" data-title="${esc(e.teams.map(t => t.abbr).join(' @ '))}">📺 ${esc(e.broadcast)}</button>` : '<span class="hint">No TV listed</span>'}</div>`).join('')
+    : '<p class="hint">No more games today.</p>';
+}
+loadGames(); setInterval(loadGames, 60000);
 
 load(); setInterval(() => { if (!busy && !document.activeElement?.matches('input,select')) load(); }, 15000);

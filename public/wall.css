@@ -68,3 +68,9 @@ body.busy main{opacity:.6;pointer-events:none}
 .side footer{padding:8px 12px;font-size:10px;color:var(--muted);border-top:1px solid var(--line)}
 @media(min-width:500px){.side .row{font-size:20px}.side .time{font-size:42px}}
 .switch small{color:var(--muted);font-size:10px}.top-switch{margin:4px 0 14px}
+.channels{display:flex;flex-wrap:wrap;gap:6px}
+.games{display:grid;gap:6px}
+.game-row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;border:1px solid #1d2f2b;background:var(--panel);padding:8px 10px}
+.game-row .gl{font-size:11px;color:var(--muted)}.game-row .gl b{color:var(--teal)}
+.game-row .gt{grid-column:1;font-size:14px}
+.game-row .watch-chip,.game-row .hint{grid-column:2;grid-row:1/3;font-size:12px;padding:8px 10px}

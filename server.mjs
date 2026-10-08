@@ -63,7 +63,7 @@ export function createServer(){return http.createServer(async(req,res)=>{
     try{res.end(JSON.stringify(await scores(league,date)));}catch{res.writeHead(502);res.end(JSON.stringify({error:'Unable to reach the score feed. Retrying automatically.'}));}return;
   }
   if(await handleWall(req,res,url,PORT))return;
-  const files={'/remote':['remote.html','text/html'],'/remote.js':['remote.js','text/javascript'],'/calm':['calm.html','text/html'],'/calm.js':['calm.js','text/javascript'],'/sidebar':['sidebar.html','text/html'],'/sidebar.js':['sidebar.js','text/javascript'],'/wall.css':['wall.css','text/css'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
+  const files={'/remote':['remote.html','text/html'],'/remote.js':['remote.js','text/javascript'],'/calm':['calm.html','text/html'],'/calm.js':['calm.js','text/javascript'],'/sidebar':['sidebar.html','text/html'],'/sidebar.js':['sidebar.js','text/javascript'],'/wall.css':['wall.css','text/css'],'/watch.js':['watch.js','text/javascript'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
   if(!files[url.pathname]){res.writeHead(404);return res.end('Not found');}
   try{const [file,type]=files[url.pathname];res.setHeader('Content-Type',type);res.end(await readFile(new URL(`./public/${file}`,import.meta.url)));}catch{res.writeHead(500);res.end('Unable to load page');}
 });}

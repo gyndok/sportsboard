@@ -27,3 +27,23 @@ test('wall rejects cross-site and malformed changes', () => withServer(async bas
 test('aerial route only accepts asset ids', () => withServer(async base => {
   assert.equal((await fetch(`${base}/aerial/..%2F..%2Fetc%2Fpasswd`)).status, 404);
 }));
+
+test('games route to saved channels or streaming apps', () => withServer(async base => {
+  const post = (path, body) => fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  let r = await post('/api/wall/watch', {broadcast: 'Some Regional Net', slot: 0});
+  assert.equal(r.status, 404);
+  assert.match((await r.json()).error, /No saved channel/);
+  r = await post('/api/wall/watch', {broadcast: 'FS1 / Peacock', slot: 1});
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).label, 'Peacock');
+  r = await post('/api/wall/channel', {name: 'FS1', aliases: 'Fox Sports 1', url: 'https://tv.youtube.com/watch/example'});
+  assert.equal(r.status, 200);
+  r = await post('/api/wall/watch', {broadcast: 'FOX SPORTS 1', slot: 2});
+  const d = await r.json();
+  assert.equal(d.label, 'FS1');
+  assert.equal(d.state.slots[2].link, 'https://tv.youtube.com/watch/example');
+  assert.equal(d.state.audio, d.state.slots[2].uid);
+  assert.equal((await post('/api/wall/watch', {broadcast: 'FS1', slot: 9})).status, 400);
+  assert.equal((await post('/api/wall/channel', {name: 'Bad', url: 'javascript:alert(1)'})).status, 400);
+  await post('/api/wall/channel', {remove: 'fs1'});
+}));
