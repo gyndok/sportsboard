@@ -36,7 +36,7 @@ export const defaultConfig = {
     {id: 'aerial-earth', name: 'Earth from space', type: 'aerial', filter: 'earth|space'},
     {id: 'aerial-city', name: 'Cityscapes', type: 'aerial', filter: 'city'},
     {id: 'aerial-all', name: 'All Aerials', type: 'aerial', filter: ''},
-    {id: 'fireplace', name: 'Fireplace', type: 'youtube', video: 'L_LUpnjgPso'}
+    {id: 'fireplace', name: 'Fireplace', type: 'youtube', video: 'L_LUpnjgPso', category: 'Fireplace'}
   ],
   // Time-of-day rotation (24h, local time). Each block runs until the next one.
   schedule: [
@@ -296,17 +296,27 @@ function apply() {
 }
 
 // ---------- calm scenes ----------
-function sceneNow(now = new Date()) {
+export const sceneCategory = s => s.category || (s.type === 'aerial' ? 'Apple Aerials' : 'My scenes');
+
+// Pick the scene to show now: a pinned scene, a pinned category ("cat:<name>"),
+// or the time-of-day schedule. Scenes the TV reported as unplayable are skipped.
+function sceneNow(now = new Date(), skip = new Set()) {
   const scenes = config.scenes;
-  if (state.calm.pinned) { const s = scenes.find(x => x.id === state.calm.pinned); if (s) return s; }
-  const mins = now.getHours() * 60 + now.getMinutes();
-  const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
-  const sorted = [...(config.schedule || [])].sort((a, b) => toMin(a.from) - toMin(b.from));
-  let block = sorted.filter(b => toMin(b.from) <= mins).pop() || sorted[sorted.length - 1];
-  const ids = (block?.scenes || []).filter(id => scenes.some(s => s.id === id));
-  if (!ids.length) return scenes[0] || null;
+  const pin = state.calm.pinned;
+  let pool;
+  if (pin?.startsWith('cat:')) pool = scenes.filter(s => sceneCategory(s) === pin.slice(4)).map(s => s.id);
+  else if (pin && scenes.some(s => s.id === pin)) pool = [pin];
+  else {
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+    const sorted = [...(config.schedule || [])].sort((a, b) => toMin(a.from) - toMin(b.from));
+    const block = sorted.filter(b => toMin(b.from) <= mins).pop() || sorted[sorted.length - 1];
+    pool = (block?.scenes || []).filter(id => scenes.some(s => s.id === id));
+  }
+  const playable = pool.filter(id => !skip.has(id));
+  if (!playable.length) return scenes.find(s => s.type === 'aerial' && !s.filter) || scenes.find(s => !skip.has(s.id)) || null;
   const slot = Math.floor(now.getTime() / 60000 / (config.rotateMinutes || 20));
-  return scenes.find(s => s.id === ids[slot % ids.length]);
+  return scenes.find(s => s.id === playable[slot % playable.length]);
 }
 
 let aerialCache = null;
@@ -375,7 +385,11 @@ function mergePatch(p) {
   if (p.solo !== undefined) state.solo = uids.has(p.solo) ? p.solo : null;
   if (!uids.has(state.solo)) state.solo = null;
   if (p.calm) {
-    if (p.calm.pinned !== undefined) state.calm.pinned = config.scenes.some(s => s.id === p.calm.pinned) ? p.calm.pinned : null;
+    if (p.calm.pinned !== undefined) {
+      const pin = p.calm.pinned;
+      const ok = pin?.startsWith?.('cat:') ? config.scenes.some(s => sceneCategory(s) === pin.slice(4)) : config.scenes.some(s => s.id === pin);
+      state.calm.pinned = ok ? pin : null;
+    }
     if (p.calm.clock !== undefined) state.calm.clock = !!p.calm.clock;
     if (p.calm.sound !== undefined) state.calm.sound = !!p.calm.sound;
   }
@@ -442,7 +456,7 @@ export async function handleWall(req, res, url, port) {
         if (!video) return send(res, 400, {error: 'Paste a YouTube video or live-stream link.'}), true;
         const name = String(b.name || 'My scene').slice(0, 40);
         const id = `yt-${video}`;
-        config.scenes = config.scenes.filter(s => s.id !== id).concat({id, name, type: 'youtube', video});
+        config.scenes = config.scenes.filter(s => s.id !== id).concat({id, name, type: 'youtube', video, category: 'My scenes'});
         if (b.when && config.schedule) {
           const block = config.schedule.find(x => x.from === b.when);
           if (block && !block.scenes.includes(id)) block.scenes.push(id);
@@ -451,7 +465,8 @@ export async function handleWall(req, res, url, port) {
       await saveConfig();
       send(res, 200, {scenes: config.scenes});
     } else if (p === '/api/wall/calm') {
-      const scene = sceneNow();
+      const skip = new Set(String(url.searchParams.get('skip') || '').split(',').filter(Boolean).slice(0, 300));
+      const scene = sceneNow(new Date(), skip);
       const out = {scene, clock: state.calm.clock, sound: state.calm.sound, mode: state.mode};
       if (scene?.type === 'aerial' || url.searchParams.has('aerials')) {
         const re = scene?.type === 'aerial' && scene.filter ? new RegExp(scene.filter, 'i') : null;

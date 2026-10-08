@@ -55,8 +55,15 @@ function render() {
   $('#channels').innerHTML = chans.length ? chans.map(c => `<span class="scene"><button data-channel="${esc(c.id)}" data-title="${esc(c.name)}">${esc(c.name)}</button><button class="x" data-remove-channel="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">✕</button></span>`).join('')
     : '<p class="hint">None yet. Put a YouTube TV channel on a screen, then tap 💾 on that screen to save it here.</p>';
   const pinned = s.calm.pinned;
-  $('#scenes').innerHTML = `<button data-scene="" aria-pressed="${!pinned}">⟳ Auto by time of day</button>` +
-    wall.scenes.map(sc => `<span class="scene"><button data-scene="${sc.id}" aria-pressed="${pinned === sc.id}">${esc(sc.name)}</button>${sc.type !== 'aerial' && sc.id !== 'fireplace' ? `<button class="x" data-remove="${sc.id}" aria-label="Remove ${esc(sc.name)}">✕</button>` : ''}</span>`).join('');
+  const cat = sc => sc.category || (sc.type === 'aerial' ? 'Apple Aerials' : 'My scenes');
+  const groups = {};
+  wall.scenes.forEach(sc => (groups[cat(sc)] ||= []).push(sc));
+  const editing = document.body.classList.contains('editing-scenes');
+  const openCat = pinned?.startsWith('cat:') ? pinned.slice(4) : cat(wall.scenes.find(sc => sc.id === pinned) || {});
+  $('#scenes').innerHTML = `<div class="scene-top"><button data-scene="" aria-pressed="${!pinned}">⟳ Auto by time of day</button><button class="edit-scenes" aria-pressed="${editing}">${editing ? 'Done' : 'Edit'}</button></div>` +
+    Object.entries(groups).map(([name, list]) => `<details class="scene-group" ${name === openCat ? 'open' : ''}><summary>${esc(name)} <small>${list.length}</small>${pinned === 'cat:' + name ? ' <b>▶</b>' : ''}</summary>
+      <div class="scenes"><button data-scene="cat:${esc(name)}" aria-pressed="${pinned === 'cat:' + name}">⟳ Rotate all ${esc(name)}</button>
+      ${list.map(sc => `<span class="scene"><button data-scene="${esc(sc.id)}" aria-pressed="${pinned === sc.id}">${esc(sc.name)}</button>${editing && sc.type !== 'aerial' ? `<button class="x" data-remove="${esc(sc.id)}" aria-label="Remove ${esc(sc.name)}">✕</button>` : ''}</span>`).join('')}</div></details>`).join('');
   $('#now-scene').textContent = wall.scene ? `Now showing: ${wall.scene.name}` : '';
   if (wall.aerialCount === 0) $('#now-scene').textContent += ' · No Apple Aerials downloaded yet (System Settings › Wallpaper › download a few).';
   $('#clock').checked = s.calm.clock; $('#sound').checked = s.calm.sound;
@@ -108,6 +115,7 @@ $('#scenes').addEventListener('click', async e => {
     await fetch('/api/wall/scene', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({remove: rm.dataset.remove})});
     return load();
   }
+  if (e.target.closest('.edit-scenes')) { document.body.classList.toggle('editing-scenes'); return render(); }
   const b = e.target.closest('[data-scene]'); if (b) patch({calm: {pinned: b.dataset.scene || null}});
 });
 $('#clock').addEventListener('change', e => patch({calm: {clock: e.target.checked}}));

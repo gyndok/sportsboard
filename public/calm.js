@@ -47,7 +47,7 @@ async function showYouTube(scene) {
     playerVars: {autoplay: 1, mute: 1, controls: 0, loop: 1, playlist: scene.video, rel: 0, playsinline: 1, iv_load_policy: 3, disablekb: 1},
     events: {
       onReady: e => { e.target.playVideo(); if (sound) e.target.unMute(); },
-      onError: () => { broken.add(scene.id); $('#msg').textContent = `“${scene.name}” can't be embedded — remove it in the remote.`; sceneId = null; poll(); }
+      onError: () => { broken.add(scene.id); sceneId = null; poll(); } // unplayable here: the server picks the next scene
     }
   });
   label(scene.name);
@@ -57,8 +57,8 @@ async function show(d) {
   const scene = d.scene;
   $('#msg').textContent = '';
   ytPlayer = null;
-  if (scene?.type === 'youtube' && !broken.has(scene.id)) return showYouTube(scene);
-  if (scene?.type === 'aerial' || broken.has(scene?.id)) {
+  if (scene?.type === 'youtube') return showYouTube(scene);
+  if (scene?.type === 'aerial') {
     aerialList = d.aerials || [];
     if (!aerialList.length) {
       const r = await fetch('/api/wall/calm?aerials=1').then(r => r.json()).catch(() => ({}));
@@ -72,7 +72,7 @@ async function show(d) {
 
 async function poll() {
   try {
-    const d = await fetch('/api/wall/calm').then(r => r.json());
+    const d = await fetch('/api/wall/calm' + (broken.size ? '?skip=' + encodeURIComponent([...broken].join(',')) : '')).then(r => r.json());
     $('#clock').hidden = !d.clock;
     if (d.sound !== sound) { sound = d.sound; if (ytPlayer?.unMute) sound ? ytPlayer.unMute() : ytPlayer.mute(); }
     const id = d.scene?.id || null;

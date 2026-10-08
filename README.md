@@ -37,7 +37,7 @@ Modes:
 - **Channel presets**: put a YouTube TV channel on a screen and tap 💾 on that screen to save it as a button under **My channels** (name it the way the scoreboard shows the network, e.g. `FS1`; add other spellings after commas). Tap a saved channel to send it to any screen.
 - **Watch buttons**: every live or upcoming game on the scoreboard, and in the remote's **Games today** list, shows its network (📺 FS1). Tap it and pick a screen; the game's network is matched to your saved channels (Peacock, Prime, Apple TV and Paramount+ games open that app). The chosen screen gets the sound.
 - **Scoreboard**: Sportsboard full screen.
-- **Calm**: Apple Aerials stored on the Mini (ocean, landscapes, Earth, cities) plus YouTube scenes, rotating by time of day. Pin a scene, toggle the clock or sound, and add YouTube live-cam links from the remote.
+- **Calm**: Apple Aerials stored on the Mini plus YouTube scenes, grouped by category and rotating by time of day. Pin one scene or a whole category (⟳ Rotate all …), toggle the clock or sound, and add YouTube links from the remote (Edit reveals ✕ to remove scenes). A scene that can't be embedded is skipped automatically. Scenes and the schedule live in `wall-config.json` (`scenes[].category`, `schedule[].from/scenes`).
 - **Clean screen**: auto-hides the Dock and menu bar, tucks window title bars out of view, blanks window titles and parks the pointer. Turning it off or choosing **Off** restores your Dock and menu bar settings.
 
 One-time setup on the Mini:

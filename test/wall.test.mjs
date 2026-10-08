@@ -47,3 +47,20 @@ test('games route to saved channels or streaming apps', () => withServer(async b
   assert.equal((await post('/api/wall/channel', {name: 'Bad', url: 'javascript:alert(1)'})).status, 400);
   await post('/api/wall/channel', {remove: 'fs1'});
 }));
+
+test('calm rotates a pinned category and skips unplayable scenes', () => withServer(async base => {
+  const post = (path, body) => fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  await post('/api/wall/scene', {name: 'Test A', url: 'https://youtu.be/aaaaaaaaaaa'});
+  await post('/api/wall/scene', {name: 'Test B', url: 'https://youtu.be/bbbbbbbbbbb'});
+  assert.equal((await post('/api/wall', {calm: {pinned: 'cat:My scenes'}})).status, 200);
+  const first = (await (await fetch(`${base}/api/wall/calm`)).json()).scene;
+  assert.equal(first.category, 'My scenes');
+  const next = (await (await fetch(`${base}/api/wall/calm?skip=${first.id}`)).json()).scene;
+  assert.equal(next.category, 'My scenes');
+  assert.notEqual(next.id, first.id);
+  const none = (await (await fetch(`${base}/api/wall/calm?skip=yt-aaaaaaaaaaa,yt-bbbbbbbbbbb`)).json()).scene;
+  assert.equal(none.type, 'aerial', 'falls back to Aerials when a whole category is unplayable');
+  await post('/api/wall', {calm: {pinned: 'cat:Nope'}});
+  assert.equal((await (await fetch(`${base}/api/wall`)).json()).state.calm.pinned, null);
+  for (const id of ['yt-aaaaaaaaaaa', 'yt-bbbbbbbbbbb']) await post('/api/wall/scene', {remove: id});
+}));
