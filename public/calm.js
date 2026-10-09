@@ -3,7 +3,7 @@
 // (a video ending, an error, a slow YouTube load) check it and quietly bail, and
 // the old scene's media is stopped and destroyed, so only the current scene plays.
 const $ = s => document.querySelector(s);
-let sceneId = null, sound = false, layer = null, ytPlayer = null, gen = 0, polling = false;
+let sceneId = null, sound = false, names = false, layer = null, ytPlayer = null, gen = 0, polling = false;
 const broken = new Map(); // scene id -> when it failed; skipped for a while, then retried
 const BROKEN_FOR = 2 * 3600e3;
 
@@ -14,8 +14,11 @@ function clock() {
 clock(); setInterval(clock, 1000);
 
 const msg = text => { $('#msg').textContent = text; };
+// Scene name in the corner for a few seconds; off unless "Show scene names" is on.
 function label(text) {
-  const l = $('#label'); l.textContent = text; l.classList.add('show');
+  const l = $('#label');
+  if (!names) { l.classList.remove('show'); return; }
+  l.textContent = text; l.classList.add('show');
   clearTimeout(label.t); label.t = setTimeout(() => l.classList.remove('show'), 8000);
 }
 function newLayer() { const el = document.createElement('div'); el.className = 'layer'; return el; }
@@ -78,6 +81,13 @@ function loadYT() {
   });
   return ytApi;
 }
+// Keep YouTube captions off. cc_load_policy alone doesn't win against a video or
+// account that turns them on, so drop the captions module whenever playback
+// starts (live streams can load it late, hence the second pass).
+function noCaptions(p) {
+  for (const m of ['captions', 'cc']) { try { p.unloadModule(m); } catch {} }
+  try { p.setOption('captions', 'track', {}); } catch {}
+}
 async function showYouTube(scene, my) {
   try { await loadYT(); }
   catch {
@@ -92,9 +102,13 @@ async function showYouTube(scene, my) {
   swapIn(wrap);
   const player = new YT.Player(target, {
     videoId: scene.video,
-    playerVars: {autoplay: 1, mute: 1, controls: 0, loop: 1, playlist: scene.video, rel: 0, playsinline: 1, iv_load_policy: 3, disablekb: 1},
+    playerVars: {autoplay: 1, mute: 1, controls: 0, loop: 1, playlist: scene.video, rel: 0, playsinline: 1, iv_load_policy: 3, disablekb: 1, cc_load_policy: 0},
     events: {
-      onReady: e => { if (my !== gen) return; e.target.playVideo(); if (sound) e.target.unMute(); },
+      onReady: e => { if (my !== gen) return; noCaptions(e.target); e.target.playVideo(); if (sound) e.target.unMute(); },
+      onStateChange: e => {
+        if (my !== gen || e.data !== YT.PlayerState.PLAYING) return;
+        noCaptions(e.target); setTimeout(() => { if (my === gen) noCaptions(e.target); }, 4000);
+      },
       onError: () => { if (my !== gen) return; broken.set(scene.id, Date.now()); sceneId = null; poll(); } // the server picks the next scene
     }
   });
@@ -132,6 +146,7 @@ async function poll() {
     if (!r.ok) return;
     const d = await r.json();
     $('#clock').hidden = !d.clock;
+    if (!!d.names !== names) { names = !!d.names; if (!names) $('#label').classList.remove('show'); }
     if (d.sound !== sound) { sound = d.sound; try { if (ytPlayer) sound ? ytPlayer.unMute() : ytPlayer.mute(); } catch {} }
     const id = d.scene?.id || null;
     if (id !== sceneId) { sceneId = id; await show(d); }

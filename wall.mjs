@@ -115,7 +115,7 @@ const defaultState = () => ({
   cleanPrev: null,
   audio: null,
   solo: null,
-  calm: {pinned: null, clock: true, sound: false},
+  calm: {pinned: null, clock: true, sound: false, names: false},
   windows: {},
   windowUrls: {},
   warnings: [],
@@ -211,7 +211,7 @@ export async function initWall({port}) {
       if (saved[key] === undefined) continue;
       try { next = buildCandidate({[key]: saved[key]}, next); } catch (e) { console.error(`Ignoring saved ${key}: ${e.message}`); }
     }
-    if (isObj(saved.calm)) for (const key of ['pinned', 'clock', 'sound']) {
+    if (isObj(saved.calm)) for (const key of ['pinned', 'clock', 'sound', 'names']) {
       if (saved.calm[key] === undefined) continue;
       try { next = buildCandidate({calm: {[key]: saved.calm[key]}}, next); } catch (e) { console.error(`Ignoring saved calm ${key}: ${e.message}`); }
     }
@@ -573,7 +573,7 @@ function buildCandidate(p, from = state) {
   if (next.audio && next.audio !== 'none' && !uids.has(next.audio)) next.audio = null;
   if (p.calm !== undefined) {
     if (!isObj(p.calm)) bad('Bad calm settings');
-    for (const k of Object.keys(p.calm)) if (!['pinned', 'clock', 'sound'].includes(k)) bad(`Unknown calm setting: ${k}`);
+    for (const k of Object.keys(p.calm)) if (!['pinned', 'clock', 'sound', 'names'].includes(k)) bad(`Unknown calm setting: ${k}`);
     if (p.calm.pinned !== undefined) {
       const pin = p.calm.pinned;
       if (pin === null || pin === '') next.calm.pinned = null;
@@ -584,7 +584,7 @@ function buildCandidate(p, from = state) {
         next.calm.pinned = pin;
       }
     }
-    for (const k of ['clock', 'sound']) if (p.calm[k] !== undefined) { if (typeof p.calm[k] !== 'boolean') bad(`${k} must be true or false`); next.calm[k] = p.calm[k]; }
+    for (const k of ['clock', 'sound', 'names']) if (p.calm[k] !== undefined) { if (typeof p.calm[k] !== 'boolean') bad(`${k} must be true or false`); next.calm[k] = p.calm[k]; }
   }
   return next;
 }
@@ -690,7 +690,7 @@ export async function handleWall(req, res, url, port) {
     } else if (p === '/api/wall/calm') {
       const skip = new Set(String(url.searchParams.get('skip') || '').split(',').filter(Boolean).slice(0, 300));
       const scene = sceneNow(new Date(), skip);
-      const out = {scene, clock: state.calm.clock, sound: state.calm.sound, mode: state.mode};
+      const out = {scene, clock: state.calm.clock, sound: state.calm.sound, names: state.calm.names, mode: state.mode};
       if (scene?.type === 'aerial' || url.searchParams.has('aerials')) {
         const re = scene?.type === 'aerial' && scene.filter ? new RegExp(scene.filter, 'i') : null;
         const all = await aerials();
