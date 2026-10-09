@@ -79,7 +79,7 @@ function render() {
       ${list.map(sc => `<span class="scene"><button data-scene="${esc(sc.id)}" aria-pressed="${pinned === sc.id}">${esc(sc.name)}</button>${editing && sc.type !== 'aerial' ? `<button class="x" data-remove="${esc(sc.id)}" aria-label="Remove ${esc(sc.name)}">✕</button>` : ''}</span>`).join('')}</div></details>`).join('');
   $('#now-scene').textContent = wall.scene ? `Now showing: ${wall.scene.name}` : '';
   if (wall.aerialCount === 0) $('#now-scene').textContent += ' · No Apple Aerials downloaded yet (System Settings › Wallpaper › download a few).';
-  $('#clock').checked = s.calm.clock; $('#sound').checked = s.calm.sound;
+  $('#clock').checked = s.calm.clock; $('#sound').checked = s.calm.sound; $('#names').checked = !!s.calm.names;
   if (wall.remoteUrls?.length) $('#phone').innerHTML = `Open on your phone: ${wall.remoteUrls.map(u => `<a href="${esc(u)}">${esc(u)}</a>`).join(' · ')}`;
 }
 function incr(a) { return a.split('/').map(Number).map(n => n + 1).join('/'); }
@@ -141,6 +141,7 @@ $('#scenes').addEventListener('click', async e => {
 });
 $('#clock').addEventListener('change', e => patch({calm: {clock: e.target.checked}}));
 $('#sound').addEventListener('change', e => patch({calm: {sound: e.target.checked}}));
+$('#names').addEventListener('change', e => patch({calm: {names: e.target.checked}}));
 $('#add-scene').addEventListener('submit', async e => {
   e.preventDefault(); const f = e.target;
   const r = await fetch('/api/wall/scene', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: f.name.value, url: f.url.value, when: f.when.value})});

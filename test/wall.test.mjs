@@ -69,6 +69,17 @@ test('calm rotates a pinned category and skips unplayable scenes', () => withSer
   for (const id of ['yt-aaaaaaaaaaa', 'yt-bbbbbbbbbbb']) await post('/api/wall/scene', {remove: id});
 }));
 
+test('scene names stay off the TV unless turned on', () => withServer(async base => {
+  const post = body => fetch(base + '/api/wall', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const calm = async () => (await fetch(`${base}/api/wall/calm`)).json();
+  assert.equal((await calm()).names, false, 'off by default');
+  assert.equal((await post({calm: {names: true}})).status, 200);
+  assert.equal((await calm()).names, true);
+  assert.equal((await post({calm: {names: 'yes'}})).status, 400);
+  assert.equal((await post({calm: {names: false}})).status, 200);
+  assert.equal((await calm()).names, false);
+}));
+
 test('sound helper gets a plan and long-polls for changes', () => withServer(async base => {
   const plan = await (await fetch(`${base}/api/wall/audio`)).json();
   assert.equal(typeof plan.version, 'number');
@@ -200,7 +211,7 @@ test('restart keeps the wall when one saved value is stale, and never clobbers t
   const good = {channels: [{id: 'fs1', name: 'FS1', aliases: [], url: 'https://tv.youtube.com/watch/example'}]};
   await writeFile(`${cfg}.last-good`, JSON.stringify(good));
   await writeFile(cfg, '{"channels": [ truncated');
-  await writeFile(st, JSON.stringify({mode: 'grid', layout: 'main3', sidebar: true, calm: {pinned: 'yt-deleted-scene', clock: false},
+  await writeFile(st, JSON.stringify({mode: 'grid', layout: 'main3', sidebar: true, calm: {pinned: 'yt-deleted-scene', clock: false, names: true},
     slots: [{uid: 'aaa', service: 'youtubetv', link: ''}, {uid: 'bbb', service: 'peacock', link: ''}]}));
   await initWall({port: 0});
   await withServer(async base => {
@@ -210,6 +221,7 @@ test('restart keeps the wall when one saved value is stale, and never clobbers t
     assert.equal(d.state.sidebar, true);
     assert.equal(d.state.calm.pinned, null, 'only the stale pin is dropped');
     assert.equal(d.state.calm.clock, false);
+    assert.equal(d.state.calm.names, true, 'scene-name setting kept across a restart');
     assert.deepEqual(d.state.slots.map(s => s.uid), ['aaa', 'bbb']);
   });
   assert.equal(JSON.parse(await readFile(`${cfg}.last-good`, 'utf8')).channels[0].id, 'fs1', 'backup untouched');
