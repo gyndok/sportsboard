@@ -230,6 +230,8 @@ function desiredWindows(area) {
   const want = [];
   if (state.mode === 'grid') {
     const plan = layoutPlan(state.layout, area, state.sidebar);
+    // A black window behind the games hides the desktop and other apps in any spare space.
+    want.push({key: 'backdrop', url: `${base}/backdrop`, rect: area});
     if (plan.scores) want.push({key: 'sidebar', url: `${base}/sidebar`, rect: plan.scores});
     visibleSlots().forEach((s, i) => want.push({key: `slot:${s.uid}`, slot: s, url: resolveUrl(serviceUrl(s)), rect: state.solo === s.uid ? plan.canvas : plan.tiles[i]}));
   } else if (state.mode === 'sportsboard') {
@@ -259,7 +261,7 @@ async function applyNow() {
   const want = desiredWindows(clean ? {...area, y: area.y + tb, height: area.height - tb} : area);
   if (clean) {
     for (const w of want) w.rect = {...w.rect, y: w.rect.y - tb, height: w.rect.height + tb};
-    want.sort((a, b) => b.rect.y - a.rect.y);
+    want.sort((a, b) => (a.key === 'backdrop' ? -1 : b.key === 'backdrop' ? 1 : b.rect.y - a.rect.y));
   }
   const wantKeys = new Set(want.map(w => w.key));
   for (const [key, id] of Object.entries(state.windows)) {
