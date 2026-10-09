@@ -95,3 +95,15 @@ test('every layout keeps game tiles 16:9 and inside the screen', async () => {
     }
   }
 });
+
+test('swapping a small screen to big keeps window identities and moves the sound', () => withServer(async base => {
+  const post = body => fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)}).then(r => r.json());
+  let {state} = await post({mode: 'grid', layout: 'main2'});
+  const [big, small] = [state.slots[0], state.slots[2]];
+  const slots = state.slots.map(s => ({...s}));
+  [slots[0], slots[2]] = [slots[2], slots[0]];
+  ({state} = await post({slots, audio: small.uid}));
+  assert.equal(state.slots[0].uid, small.uid);
+  assert.equal(state.slots[2].uid, big.uid);
+  assert.equal(state.audio, small.uid);
+}));

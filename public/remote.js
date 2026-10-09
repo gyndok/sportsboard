@@ -43,6 +43,10 @@ function render() {
       `<button data-audio="${slot.uid}" aria-pressed="${s.audio === slot.uid}"><b>${s.audio === slot.uid ? '🔊' : '🔈'} ${i + 1}</b><small>${esc(what(slot))}</small></button>`).join('') +
       `<button data-audio="none" aria-pressed="${s.audio === 'none'}"><b>🔇</b><small>Mute all</small></button>`
     : '<p class="hint">Start Game day to choose which screen you hear.</p>';
+  const mainLayout = s.mode === 'grid' && /^main/.test(s.layout);
+  $('#swap-wrap').hidden = !mainLayout;
+  if (mainLayout) $('#swap-bar').innerHTML = showing.slice(1).map((slot, i) => slot.service === 'sportsboard' ? '' :
+    `<button data-promote="${slot.uid}"><b>⇱ ${i + 2}</b><small>${esc(what(slot))}</small></button>`).join('');
   $('#sound-hint').hidden = !!wall.soundHelper || s.mode !== 'grid';
   $('#sound-hint').textContent = 'Sound switching is in basic mode. Install the Sportsboard Sound helper in Chrome on the Mini so only the chosen screen ever plays (see README).';
   $('#clean').checked = s.clean !== false;
@@ -90,6 +94,13 @@ $('#layouts').addEventListener('click', e => {
   patch({layout: b.dataset.layout, slots, solo: null});
 });
 $('#clean').addEventListener('change', e => patch({clean: e.target.checked}, e.target.checked ? 'Hiding desktop…' : 'Showing desktop…'));
+// Swap a small screen into the big spot; its sound comes with it.
+$('#swap-bar').addEventListener('click', e => {
+  const b = e.target.closest('[data-promote]'); if (!b) return;
+  const slots = slotsCopy(), i = slots.findIndex(x => x.uid === b.dataset.promote);
+  [slots[0], slots[i]] = [slots[i], slots[0]];
+  patch({slots, solo: null, audio: b.dataset.promote}, 'Swapping…');
+});
 $('#sound-bar').addEventListener('click', e => { const b = e.target.closest('[data-audio]'); if (b) patch({audio: b.dataset.audio}, 'Switching sound…'); });
 $('#sidebar').addEventListener('change', e => patch({sidebar: e.target.checked}));
 $('#slots').addEventListener('click', e => {
@@ -97,7 +108,7 @@ $('#slots').addEventListener('click', e => {
   const uid = b.closest('li').dataset.uid, s = wall.state, slots = slotsCopy();
   if (b.dataset.act === 'audio') patch({audio: uid}, 'Switching sound…');
   if (b.dataset.act === 'solo') patch({solo: s.solo === uid ? null : uid});
-  if (b.dataset.act === 'promote') { const i = slots.findIndex(x => x.uid === uid); slots.unshift(...slots.splice(i, 1)); patch({slots, solo: null}); }
+  if (b.dataset.act === 'promote') { const i = slots.findIndex(x => x.uid === uid); slots.unshift(...slots.splice(i, 1)); patch({slots, solo: null, audio: uid}, 'Swapping…'); }
   if (b.dataset.act === 'save') {
     const name = prompt('Name this channel the way the scoreboard shows it (e.g. FS1, ESPN, FOX).\nAdd other spellings after commas: FOX, FOX 26');
     if (!name) return;
