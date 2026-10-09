@@ -1,9 +1,10 @@
 #!/bin/zsh
 # Restarts Sportsboard (with TV Wall) on port 8788, reachable from phones on the home network.
+{
 cd "$(dirname "$0")"
-# Pull the latest code from GitHub (skips quietly if offline or not signed in).
-if GIT_TERMINAL_PROMPT=0 git pull --ff-only -q 2>/dev/null; then echo "Up to date with GitHub ($(git log -1 --format='%h %s'))."
-else echo "Couldn't update from GitHub; starting the local copy."; fi
+# Update from GitHub; a version whose tests fail is rolled back automatically.
+./update.sh
+touch .last-update-check
 PORT=8788
 if launchctl print "gui/$(id -u)/com.gyndok.sportsboard" >/dev/null 2>&1; then
   echo "Restarting the Sportsboard service…"
@@ -25,3 +26,5 @@ echo
 echo "Board:  http://localhost:$PORT"
 echo "Remote: http://$(ipconfig getifaddr en0 || ipconfig getifaddr en1):$PORT/remote"
 open "http://localhost:$PORT/remote"
+exit
+}

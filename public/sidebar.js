@@ -1,10 +1,8 @@
-const leagues = ['NFL', 'NCAAF', 'MLB', 'NBA', 'NHL'];
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 let favorites = new Set();
 try { favorites = new Set(JSON.parse(localStorage.getItem('sportsboard.favorites') || '[]')); } catch {}
 const isFav = e => e.teams.some(t => favorites.has(`${e.league}:${t.name}`));
-const ymd = (d = new Date()) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 
 function tick() {
   const d = new Date();
@@ -19,15 +17,16 @@ const game = e => `<div class="g ${e.state}">
 </div>`;
 
 async function refresh() {
-  const results = await Promise.all(leagues.map(l => fetch(`/api/scores?league=${l}&date=${ymd()}`).then(r => r.json()).then(d => (d.events || []).map(e => ({...e, league: l}))).catch(() => [])));
-  const all = results.flat();
+  const feed = await ScoreFeed.load();
+  const all = feed.events;
   const byFav = (a, b) => isFav(b) - isFav(a) || Date.parse(a.date) - Date.parse(b.date);
   const live = all.filter(e => e.state === 'in').sort(byFav);
   const next = all.filter(e => e.state === 'pre').sort(byFav).slice(0, 12);
   const done = all.filter(e => e.state === 'post').sort((a, b) => isFav(b) - isFav(a) || Date.parse(b.date) - Date.parse(a.date)).slice(0, 10);
   const block = (title, list) => list.length ? `<h3>${title}</h3>${list.map(game).join('')}` : '';
-  $('#track').innerHTML = (block(`Live · ${live.length}`, live) + block('Up next', next) + block('Final', done)) || '<p class="empty">No games today.</p>';
-  $('#foot').textContent = `Updated ${new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}`;
+  $('#track').innerHTML = (block(`Live · ${live.length}`, live) + block('Up next', next) + block('Final', done)) || `<p class="empty">${esc(ScoreFeed.emptyText(feed, 'No games today.'))}</p>`;
+  $('#foot').textContent = ScoreFeed.note(feed);
+  $('#foot').classList.toggle('warn-foot', !feed.complete);
 }
 refresh(); setInterval(refresh, 30000);
 

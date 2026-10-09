@@ -2,7 +2,7 @@
 // Sportsboard, a scores sidebar, or a calm ambient scene. Controlled from
 // /remote on any phone or laptop on the home network.
 import {execFile} from 'node:child_process';
-import {readFile, writeFile, stat} from 'node:fs/promises';
+import {readFile, writeFile, stat, rename, copyFile} from 'node:fs/promises';
 import {createReadStream} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import os from 'node:os';
@@ -13,7 +13,7 @@ const TESTING = !!process.env.NODE_TEST_CONTEXT;
 const DATA_DIR = TESTING ? os.tmpdir() : fileURLToPath(new URL('.', import.meta.url));
 const CONFIG_FILE = path.join(DATA_DIR, TESTING ? `wall-config-test-${process.pid}.json` : 'wall-config.json');
 const STATE_FILE = path.join(DATA_DIR, TESTING ? `wall-state-test-${process.pid}.json` : 'wall-state.json');
-const AERIAL_ROOT = '/Library/Application Support/com.apple.idleassetsd/Customer';
+const aerialRoot = () => process.env.WALL_AERIAL_ROOT || '/Library/Application Support/com.apple.idleassetsd/Customer';
 const BROWSER = process.env.WALL_BROWSER || 'Google Chrome';
 
 export const defaultConfig = {
@@ -144,19 +144,114 @@ function audioPlan() {
   return {version: audioVersion, active: true, audio: state.audio, wall};
 }
 
-async function loadJson(file, fallback) {
-  try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; }
+// ---------- persistence: atomic, serialized writes with a last-good copy ----------
+const writeChains = new Map();
+function writeJsonAtomic(file, data) {
+  const run = (writeChains.get(file) || Promise.resolve()).then(async () => {
+    const tmp = `${file}.tmp-${process.pid}`;
+    await writeFile(tmp, JSON.stringify(data, null, 2));
+    await rename(tmp, file); // replaces the old file in one step, so a crash mid-save can't truncate it
+  });
+  writeChains.set(file, run.catch(() => {}));
+  return run;
 }
-async function saveConfig() { await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2)); }
-async function saveState() { state.updated = new Date().toISOString(); await writeFile(STATE_FILE, JSON.stringify(state, null, 2)).catch(() => {}); }
+const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+async function loadJson(file) {
+  for (const f of [file, `${file}.last-good`]) {
+    let text;
+    try { text = await readFile(f, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') console.error(`Couldn't read ${f}: ${e.message}`); continue; }
+    try {
+      const v = JSON.parse(text);
+      if (!isObj(v)) throw Error('not an object');
+      if (f !== file) console.error(`${path.basename(file)} was unreadable; recovered settings from ${path.basename(f)}`);
+      return {value: v, fromBackup: f !== file};
+    } catch (e) {
+      console.error(`${f} is not valid JSON (${e.message}); keeping a copy as .corrupt`);
+      await copyFile(f, `${f}.corrupt`).catch(() => {});
+    }
+  }
+  return null;
+}
+async function saveConfig() { await writeJsonAtomic(CONFIG_FILE, config); }
+async function saveState() {
+  state.updated = new Date().toISOString();
+  try { await writeJsonAtomic(STATE_FILE, state); } catch (e) { console.error(`Couldn't save wall state: ${e.message}`); }
+}
+
+// Keep only well-formed entries from a saved config; fall back to defaults otherwise.
+function sanitizeConfig(saved) {
+  const c = {...structuredClone(defaultConfig), ...saved};
+  const keep = (list, ok, what) => { if (!Array.isArray(list)) return null; const good = list.filter(ok); if (good.length !== list.length) console.error(`Dropped ${list.length - good.length} invalid ${what} from wall-config.json`); return good; };
+  c.services = keep(c.services, x => isObj(x) && typeof x.id === 'string' && typeof x.name === 'string' && typeof x.url === 'string', 'services') || structuredClone(defaultConfig.services);
+  c.channels = keep(c.channels, x => isObj(x) && typeof x.id === 'string' && typeof x.name === 'string' && validUrl(x.url), 'channels') || [];
+  c.scenes = keep(c.scenes, x => isObj(x) && typeof x.id === 'string' && typeof x.name === 'string' && (x.type === 'aerial' || (x.type === 'youtube' && /^[\w-]{11}$/.test(x.video || ''))), 'scenes') || structuredClone(defaultConfig.scenes);
+  c.schedule = keep(c.schedule, x => isObj(x) && /^\d{2}:\d{2}$/.test(x.from || '') && Array.isArray(x.scenes), 'schedule blocks') || structuredClone(defaultConfig.schedule);
+  if (!(c.rotateMinutes >= 1 && c.rotateMinutes <= 1440)) c.rotateMinutes = defaultConfig.rotateMinutes;
+  if (!(c.titlebar >= 0 && c.titlebar <= 80)) c.titlebar = defaultConfig.titlebar;
+  return c;
+}
 
 export async function initWall({port}) {
   base = `http://127.0.0.1:${port}`;
-  const savedConfig = await loadJson(CONFIG_FILE, null);
-  if (savedConfig) config = {...structuredClone(defaultConfig), ...savedConfig};
-  else await saveConfig().catch(() => {});
-  const saved = await loadJson(STATE_FILE, null);
-  if (saved) state = {...defaultState(), ...saved, calm: {...defaultState().calm, ...saved.calm}};
+  const loadedConfig = await loadJson(CONFIG_FILE);
+  if (loadedConfig) {
+    config = sanitizeConfig(loadedConfig.value);
+    // Refresh the backup only from a main file that loaded; after recovering from the
+    // backup, rewrite the main file instead (never copy a corrupt file over the backup).
+    if (loadedConfig.fromBackup) await saveConfig().catch(e => console.error(`Couldn't rewrite wall-config.json: ${e.message}`));
+    else await copyFile(CONFIG_FILE, `${CONFIG_FILE}.last-good`).catch(() => {});
+  } else await saveConfig().catch(e => console.error(`Couldn't write wall-config.json: ${e.message}`));
+  const loaded = await loadJson(STATE_FILE);
+  if (loaded) {
+    const saved = loaded.value;
+    // Restore field by field: one stale value (say, a pinned scene that was since
+    // deleted) is dropped on its own instead of throwing away the whole wall.
+    let next = defaultState();
+    for (const key of ['mode', 'layout', 'sidebar', 'clean', 'slots', 'audio', 'solo']) {
+      if (saved[key] === undefined) continue;
+      try { next = buildCandidate({[key]: saved[key]}, next); } catch (e) { console.error(`Ignoring saved ${key}: ${e.message}`); }
+    }
+    if (isObj(saved.calm)) for (const key of ['pinned', 'clock', 'sound']) {
+      if (saved.calm[key] === undefined) continue;
+      try { next = buildCandidate({calm: {[key]: saved.calm[key]}}, next); } catch (e) { console.error(`Ignoring saved calm ${key}: ${e.message}`); }
+    }
+    state = next;
+    if (isObj(saved.windows)) state.windows = saved.windows;
+    if (isObj(saved.windowUrls)) state.windowUrls = saved.windowUrls;
+    if (isObj(saved.windowOrigins)) state.windowOrigins = saved.windowOrigins;
+    if (isObj(saved.cleanPrev) && typeof saved.cleanPrev.dock === 'boolean') state.cleanPrev = saved.cleanPrev;
+    state.updated = saved.updated || null;
+    state.gridSince = saved.gridSince || null;
+  }
+  // Nothing to recover when the wall is off with no windows and no hidden Dock to restore;
+  // don't launch or focus Chrome at every login for no reason.
+  const needsRecovery = state.mode !== 'off' || Object.keys(state.windows).length || state.cleanPrev;
+  if (needsRecovery && !TESTING && process.platform === 'darwin') setTimeout(() => exclusive(recoverWall).catch(e => console.error(`Startup recovery failed: ${e.message}`)), 4000);
+}
+
+// After a server, Chrome or Mac restart: forget windows that are no longer ours,
+// put back Dock/menu-bar settings if a previous run left them hidden, and rebuild
+// the wall.
+async function recoverWall() {
+  const entries = Object.entries(state.windows);
+  if (entries.length) {
+    const info = await osa(`if(!chrome.running())return '[]';return JSON.stringify(arg.map(id=>{try{return {id,url:chrome.windows.byId(id).activeTab.url()}}catch(e){return {id,url:null}}}))`, entries.map(([, id]) => id)).catch(() => []);
+    const urlById = Object.fromEntries((Array.isArray(info) ? info : []).map(i => [i.id, i.url]));
+    // Compare with the site each window actually landed on last time (pages redirect,
+    // e.g. youtu.be → www.youtube.com), falling back to the site we asked for.
+    const site = u => { try { return new URL(u).hostname.replace(/^www\./, '').split('.').slice(-2).join('.'); } catch { return null; } };
+    for (const [key, id] of entries) {
+      const now = site(urlById[id]);
+      const expected = [state.windowOrigins?.[key], state.windowUrls[key]].map(site).filter(Boolean);
+      if (!now || !expected.includes(now)) { delete state.windows[key]; delete state.windowUrls[key]; delete state.windowOrigins?.[key]; }
+    }
+  }
+  // Game day windows still open (only the server restarted): keep watching. If they're
+  // gone (Mac or Chrome restarted), reopen streams only if Game day was set recently.
+  const gamesStillOpen = Object.keys(state.windows).some(k => k.startsWith('slot:'));
+  const age = Date.now() - Date.parse(state.gridSince || 0);
+  if (state.mode === 'grid' && !gamesStillOpen && !(age < 6 * 3600e3)) state.mode = 'off';
+  await applyNow();
 }
 
 // ---------- macOS automation (JavaScript for Automation via osascript) ----------
@@ -192,7 +287,7 @@ async function openWindow(url) {
 const setBounds = (id, r) => osa(`const w=chrome.windows.byId(arg.id);w.bounds={x:arg.r.x,y:arg.r.y,width:arg.r.width,height:arg.r.height};return 'true';`, {id, r});
 const setUrl = (id, url) => osa(`chrome.windows.byId(arg.id).activeTab.url=arg.url;return 'true';`, {id, url});
 const closeWindow = id => osa(`chrome.windows.byId(arg).close();return 'true';`, id);
-const raise = ids => osa(`for(const id of arg){try{chrome.windows.byId(id).index=1;}catch(e){}}chrome.activate();return 'true';`, ids);
+const raise = ids => ids.length ? osa(`for(const id of arg){try{chrome.windows.byId(id).index=1;}catch(e){}}chrome.activate();return 'true';`, ids) : Promise.resolve();
 // Re-stack only if something is out of order: the first id (the backdrop) must be
 // behind every other wall window. Returns true when it had to fix the order.
 const fixStacking = ids => osa(`const idx=id=>{try{return chrome.windows.byId(id).index()}catch(e){return null}};
@@ -217,14 +312,23 @@ async function setMutes(list) {
 }
 
 // ---------- clean screen: hide Dock + menu bar, park the pointer ----------
+// Remember the user's own Dock/menu-bar settings before the first change and only
+// ever restore exactly what was captured. If they can't be read, leave them alone.
+const setDock = want => osa(`const d=Application('System Events').dockPreferences;const errs=[];if(arg.dock!==null){try{d.autohide=arg.dock}catch(e){errs.push(String(e))}}if(arg.menu!==null){try{d.autohideMenuBar=arg.menu}catch(e){errs.push(String(e))}}return JSON.stringify(errs);`, want, {chrome: false}).then(r => r || []);
 async function setClean(on) {
-  if (on && !state.cleanPrev) {
-    state.cleanPrev = await osa(`const d=Application('System Events').dockPreferences;let dock=false,menu=false;try{dock=d.autohide()}catch(e){}try{menu=d.autohideMenuBar()}catch(e){}return JSON.stringify({dock,menu});`, null, {chrome: false}).catch(() => ({dock: false, menu: false}));
+  if (on) {
+    if (!state.cleanPrev) {
+      const prev = await osa(`const d=Application('System Events').dockPreferences;let menu=null;try{menu=d.autohideMenuBar()}catch(e){}return JSON.stringify({dock:d.autohide(),menu});`, null, {chrome: false}).catch(() => null);
+      if (!isObj(prev) || typeof prev.dock !== 'boolean') return ['Could not read your Dock settings, so they were left alone. Allow control of System Events when macOS asks.'];
+      state.cleanPrev = prev;
+      await saveState(); // saved first, so a crash can still restore them on the next start
+    }
+    return setDock({dock: true, menu: state.cleanPrev.menu === null ? null : true});
   }
-  const want = on ? {dock: true, menu: true} : (state.cleanPrev || {dock: false, menu: false});
-  const res = await osa(`const d=Application('System Events').dockPreferences;const errs=[];try{d.autohide=arg.dock}catch(e){errs.push(String(e))}try{d.autohideMenuBar=arg.menu}catch(e){errs.push(String(e))}return JSON.stringify(errs);`, want, {chrome: false});
-  if (!on) state.cleanPrev = null;
-  return res || [];
+  if (!state.cleanPrev) return []; // nothing was changed, so nothing to restore
+  const errs = await setDock(state.cleanPrev);
+  if (!errs.length) state.cleanPrev = null;
+  return errs;
 }
 const parkPointer = area => osa(`ObjC.import('CoreGraphics');$.CGWarpMouseCursorPosition({x:arg.x,y:arg.y});return 'true';`, {x: area.x + area.width - 2, y: Math.round(area.y + area.height / 2)}, {chrome: false});
 let cleanApplied = null;
@@ -255,10 +359,15 @@ async function applyNow() {
   if (process.platform !== 'darwin' || TESTING) { state.warnings = ['Window control only works on the Mac mini.']; await saveState(); return; }
   const clean = state.clean && state.mode !== 'off';
   if (clean !== cleanApplied) {
-    try { const errs = await setClean(clean); if (errs.length) warnings.push('Could not auto-hide the Dock/menu bar — allow Terminal to control System Events when macOS asks.'); }
-    catch (e) { warnings.push(`Clean screen unavailable: ${e.message}`); }
-    cleanApplied = clean;
-    await sleep(1200); // let macOS finish sliding the Dock/menu bar away
+    let errs;
+    try { errs = await setClean(clean); } catch (e) { errs = [e.message]; }
+    if (errs.length) {
+      warnings.push(errs.find(e => e.startsWith('Could not read')) || `Couldn't ${clean ? 'hide' : 'restore'} the Dock/menu bar: ${errs[0]}`);
+      cleanApplied = null; // not applied: try again on the next change
+    } else {
+      cleanApplied = clean;
+      await sleep(1200); // let macOS finish sliding the Dock/menu bar
+    }
   }
   const area = await screenArea();
   const live = new Set(await windowIds());
@@ -294,10 +403,12 @@ async function applyNow() {
   for (const ms of [3000, 8000]) setTimeout(() => { lock = lock.then(keepStacking).catch(() => {}); }, ms);
   if (clean) await parkPointer(area).catch(() => {});
   state.debug = {area, want: want.map(w => ({key: w.key, id: state.windows[w.key], rect: w.rect})),
-    got: await osa(`return JSON.stringify(arg.map(id=>{try{const w=chrome.windows.byId(id);return {id,index:w.index(),b:w.bounds(),title:w.name()}}catch(e){return {id,err:String(e)}}}))`, order).catch(e => String(e))};
+    got: await osa(`return JSON.stringify(arg.map(id=>{try{const w=chrome.windows.byId(id);return {id,index:w.index(),b:w.bounds(),title:w.name(),url:w.activeTab.url()}}catch(e){return {id,err:String(e)}}}))`, order).catch(e => String(e))};
   // Where each wall window actually ended up (macOS may clamp what we asked for).
   const gotById = Object.fromEntries((Array.isArray(state.debug.got) ? state.debug.got : []).filter(g => g.b).map(g => [g.id, g.b]));
   state.actual = Object.fromEntries(want.map(w => [w.key, gotById[state.windows[w.key]] || w.rect]));
+  const urlById = Object.fromEntries((Array.isArray(state.debug.got) ? state.debug.got : []).filter(g => g.url).map(g => [g.id, g.url]));
+  state.windowOrigins = Object.fromEntries(want.filter(w => urlById[state.windows[w.key]]).map(w => [w.key, urlById[state.windows[w.key]]]));
   warnings.push(...await applyAudio());
   state.warnings = warnings;
   await saveState();
@@ -334,11 +445,14 @@ function scheduleMuteRefresh() {
   if (state.mode !== 'off') muteTimer = setInterval(() => { lock = lock.then(() => (++tick % 3 ? null : applyAudio())).then(keepStacking).catch(() => {}); }, 5000);
 }
 
-function apply() {
-  const run = lock.then(applyNow, applyNow);
+// Every change to the wall (validate → commit → put it on screen → save) runs one at
+// a time, so two phones can't interleave half-applied commands.
+function exclusive(fn) {
+  const run = lock.then(fn, fn);
   lock = run.catch(() => {});
   return run;
 }
+const apply = () => exclusive(applyNow);
 
 // ---------- calm scenes ----------
 export const sceneCategory = s => s.category || (s.type === 'aerial' ? 'Apple Aerials' : 'My scenes');
@@ -366,7 +480,8 @@ function sceneNow(now = new Date(), skip = new Set()) {
 
 let aerialCache = null;
 async function aerials() {
-  if (aerialCache && Date.now() - aerialCache.at < 300000) return aerialCache.list;
+  const AERIAL_ROOT = aerialRoot();
+  if (aerialCache && aerialCache.root === AERIAL_ROOT && Date.now() - aerialCache.at < 300000) return aerialCache.list;
   let entries = {};
   try { entries = JSON.parse(await readFile(path.join(AERIAL_ROOT, 'entries.json'), 'utf8')); } catch {}
   const catNames = {};
@@ -382,7 +497,7 @@ async function aerials() {
       break;
     }
   }
-  aerialCache = {at: Date.now(), list};
+  aerialCache = {at: Date.now(), root: AERIAL_ROOT, list};
   return list;
 }
 
@@ -399,69 +514,115 @@ function youtubeId(input) {
 
 // ---------- HTTP ----------
 function lanAddresses(port) {
-  return Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => `http://${i.address}:${port}/remote`);
+  try { return Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => `http://${i.address}:${port}/remote`); }
+  catch { return []; } // only used to suggest a phone URL; never worth failing the request
 }
+class BadRequest extends Error { constructor(m, status = 400) { super(m); this.status = status; } }
+const bad = (m, status) => { throw new BadRequest(m, status); };
+const MAX_SLOTS = 4;
 const privateIp = ip => /^(::1|127\.|::ffff:127\.|10\.|::ffff:10\.|192\.168\.|::ffff:192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::ffff:172\.(1[6-9]|2\d|3[01])\.|fe80:|fc|fd|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/i.test(ip || '');
-const publicState = () => { const {windows, windowUrls, cleanPrev, ...rest} = state; return rest; };
+const publicState = () => { const {windows, windowUrls, windowOrigins, cleanPrev, ...rest} = state; return rest; };
 function send(res, code, body) { res.writeHead(code, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(body)); }
 async function readBody(req) {
   let size = 0; const chunks = [];
-  for await (const c of req) { size += c.length; if (size > 20000) throw Error('Too large'); chunks.push(c); }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  for await (const c of req) { size += c.length; if (size > 20000) bad('Request too large', 413); chunks.push(c); }
+  let body;
+  try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { bad('Invalid JSON'); }
+  if (!isObj(body)) bad('Expected a JSON object');
+  return body;
 }
 const validUrl = u => { try { const x = new URL(u); return ['http:', 'https:'].includes(x.protocol); } catch { return false; } };
 
-function mergePatch(p) {
-  if (p.mode !== undefined) { if (!['off', 'grid', 'sportsboard', 'calm'].includes(p.mode)) throw Error('Bad mode'); state.mode = p.mode; }
-  if (p.layout !== undefined) { if (!LAYOUTS[p.layout]) throw Error('Bad layout'); state.layout = p.layout; }
-  if (p.sidebar !== undefined) state.sidebar = !!p.sidebar;
-  if (p.clean !== undefined) state.clean = !!p.clean;
-  if (Array.isArray(p.slots)) {
-    if (p.slots.length > 6) throw Error('Too many slots');
-    state.slots = p.slots.map(s => {
-      if (!config.services.some(x => x.id === s.service)) throw Error('Unknown service');
-      const link = String(s.link || '').trim();
-      if (link && !validUrl(link)) throw Error('Links must start with http:// or https://');
-      return {uid: /^[a-z0-9]{1,12}$/.test(s.uid || '') ? s.uid : uid(), service: s.service, link};
+// Build the complete next state from a change request without touching the live
+// state. Anything invalid throws, so a rejected request changes nothing.
+const PATCH_KEYS = new Set(['mode', 'layout', 'sidebar', 'clean', 'slots', 'audio', 'solo', 'calm']);
+const MODES = ['off', 'grid', 'sportsboard', 'calm'];
+function buildCandidate(p, from = state) {
+  if (!isObj(p)) bad('Expected a JSON object');
+  for (const k of Object.keys(p)) if (!PATCH_KEYS.has(k)) bad(`Unknown setting: ${k}`);
+  const next = {...from, calm: {...from.calm}, slots: from.slots.map(s => ({...s}))};
+  if (p.mode !== undefined) {
+    if (!MODES.includes(p.mode)) bad('Bad mode');
+    if (p.mode === 'grid' && from.mode !== 'grid') next.gridSince = new Date().toISOString();
+    next.mode = p.mode;
+  }
+  if (p.layout !== undefined) { if (typeof p.layout !== 'string' || !Object.hasOwn(LAYOUTS, p.layout)) bad('Bad layout'); next.layout = p.layout; }
+  for (const k of ['sidebar', 'clean']) if (p[k] !== undefined) { if (typeof p[k] !== 'boolean') bad(`${k} must be true or false`); next[k] = p[k]; }
+  if (p.slots !== undefined) {
+    if (!Array.isArray(p.slots) || p.slots.length > MAX_SLOTS) bad(`Use up to ${MAX_SLOTS} screens`);
+    const given = new Set(p.slots.map(s => s?.uid).filter(Boolean)), seen = new Set();
+    next.slots = p.slots.map(s => {
+      if (!isObj(s)) bad('Bad screen');
+      if (typeof s.service !== 'string' || !config.services.some(x => x.id === s.service)) bad('Unknown service');
+      if (s.link != null && typeof s.link !== 'string') bad('Bad link');
+      const link = (s.link || '').trim();
+      if (link && !validUrl(link)) bad('Links must start with http:// or https://');
+      let id = s.uid;
+      if (id == null || id === '') { do id = uid(); while (given.has(id) || seen.has(id)); }
+      else if (typeof id !== 'string' || !/^[a-z0-9]{1,12}$/.test(id)) bad('Bad screen id');
+      if (seen.has(id)) bad('Two screens have the same id');
+      seen.add(id);
+      return {uid: id, service: s.service, link};
     });
   }
-  const uids = new Set(state.slots.map(s => s.uid));
-  if (p.audio !== undefined) state.audio = p.audio === 'none' ? 'none' : uids.has(p.audio) ? p.audio : null;
-  if (p.solo !== undefined) state.solo = uids.has(p.solo) ? p.solo : null;
-  if (!uids.has(state.solo)) state.solo = null;
-  if (p.calm) {
+  const uids = new Set(next.slots.map(s => s.uid));
+  if (p.audio !== undefined) { if (p.audio === null || p.audio === 'none' || uids.has(p.audio)) next.audio = p.audio; else bad('Unknown screen for sound'); }
+  if (p.solo !== undefined) { if (p.solo === null || uids.has(p.solo)) next.solo = p.solo; else bad('Unknown screen'); }
+  const visible = new Set(next.slots.slice(0, LAYOUTS[next.layout].slots).map(s => s.uid));
+  if (next.solo && !visible.has(next.solo)) next.solo = null;
+  if (next.audio && next.audio !== 'none' && !uids.has(next.audio)) next.audio = null;
+  if (p.calm !== undefined) {
+    if (!isObj(p.calm)) bad('Bad calm settings');
+    for (const k of Object.keys(p.calm)) if (!['pinned', 'clock', 'sound'].includes(k)) bad(`Unknown calm setting: ${k}`);
     if (p.calm.pinned !== undefined) {
       const pin = p.calm.pinned;
-      const ok = pin?.startsWith?.('cat:') ? config.scenes.some(s => sceneCategory(s) === pin.slice(4)) : config.scenes.some(s => s.id === pin);
-      state.calm.pinned = ok ? pin : null;
+      if (pin === null || pin === '') next.calm.pinned = null;
+      else if (typeof pin !== 'string') bad('Bad scene');
+      else {
+        const ok = pin.startsWith('cat:') ? config.scenes.some(sc => sceneCategory(sc) === pin.slice(4)) : config.scenes.some(sc => sc.id === pin);
+        if (!ok) bad('Unknown scene');
+        next.calm.pinned = pin;
+      }
     }
-    if (p.calm.clock !== undefined) state.calm.clock = !!p.calm.clock;
-    if (p.calm.sound !== undefined) state.calm.sound = !!p.calm.sound;
+    for (const k of ['clock', 'sound']) if (p.calm[k] !== undefined) { if (typeof p.calm[k] !== 'boolean') bad(`${k} must be true or false`); next.calm[k] = p.calm[k]; }
   }
+  return next;
 }
 
 export async function handleWall(req, res, url, port) {
   const p = url.pathname;
   if (!(p.startsWith('/api/wall') || p.startsWith('/aerial/'))) return false;
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  if (req.method === 'POST') {
-    const origin = req.headers.origin;
-    if (!privateIp(req.socket.remoteAddress) || (origin && new URL(origin).host !== req.headers.host)) { send(res, 403, {error: 'Forbidden'}); return true; }
-  }
   try {
+    const getOnly = p === '/api/wall/audio' || p === '/api/wall/calm' || p.startsWith('/aerial/');
+    const allowed = p === '/api/wall' ? ['GET', 'POST'] : getOnly ? ['GET', 'HEAD'] : ['POST'];
+    if (!allowed.includes(req.method)) { res.setHeader('Allow', allowed.join(', ')); send(res, 405, {error: 'Method not allowed'}); return true; }
+    if (req.method === 'POST') {
+      // Changes only from the home network, and only from pages served by this server.
+      const origin = req.headers.origin;
+      let sameOrigin = !origin;
+      if (origin) { try { sameOrigin = new URL(origin).host === req.headers.host; } catch { sameOrigin = false; } }
+      if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
+    }
     if (p === '/api/wall' && req.method === 'GET') {
       send(res, 200, {state: publicState(), soundHelper: helperActive(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length});
     } else if (p === '/api/wall/audio') {
-      helperSeen = Date.now();
+      // Only the Sportsboard Sound extension counts as "the helper is running".
+      if (req.headers['x-sportsboard-helper'] === '1' || /^chrome-extension:\/\//.test(req.headers.origin || '')) helperSeen = Date.now();
       const since = Number(url.searchParams.get('v'));
-      if (url.searchParams.has('wait') && since === audioVersion) {
+      if (url.searchParams.has('wait') && since === audioVersion && audioWaiters.size < 16) {
         await new Promise(resolve => { const done = () => { clearTimeout(t); audioWaiters.delete(done); resolve(); }; const t = setTimeout(done, 25000); audioWaiters.add(done); req.on('close', done); });
       }
       if (!res.writableEnded && !res.destroyed) send(res, 200, audioPlan());
     } else if (p === '/api/wall' && req.method === 'POST') {
-      mergePatch(await readBody(req));
-      const calmOnly = state.mode === 'calm' && state.windows.calm && (state.clean && state.mode !== 'off') === cleanApplied;
-      if (!calmOnly) await apply(); else await saveState();
+      const body = await readBody(req);
+      await exclusive(async () => {
+        const next = buildCandidate(body); // throws (and changes nothing) if invalid
+        state = next;
+        const calmOnly = state.mode === 'calm' && state.windows.calm && (state.clean && state.mode !== 'off') === cleanApplied;
+        if (calmOnly) await saveState();
+        else await applyNow().catch(async e => { state.warnings = [`The TV couldn't be updated: ${e.message}`]; await saveState(); });
+      });
       send(res, 200, {state: publicState(), scene: sceneNow()});
     } else if (p === '/api/wall/channel' && req.method === 'POST') {
       const b = await readBody(req);
@@ -491,18 +652,28 @@ export async function handleWall(req, res, url, port) {
       if (b.channel) { const ch = config.channels.find(c => c.id === b.channel); if (ch) target = {service: 'youtubetv', link: ch.url, label: ch.name}; }
       else if (b.broadcast) target = resolveBroadcast(b.broadcast);
       if (!target) return send(res, 404, {error: `No saved channel for ${String(b.broadcast || 'that').slice(0, 40)}. Tune a screen to it in YouTube TV, then tap 💾 on that screen in the remote.`}), true;
-      while (state.slots.length <= slotIndex) state.slots.push({uid: uid(), service: 'youtubetv', link: ''});
-      if ((LAYOUTS[state.layout]?.slots || 1) <= slotIndex) state.layout = fitLayout(slotIndex + 1);
-      const slot = state.slots[slotIndex];
-      slot.service = target.service; slot.link = target.link;
-      state.mode = 'grid'; state.audio = slot.uid;
-      if (state.solo && state.solo !== slot.uid) state.solo = null;
-      await apply();
+      await exclusive(async () => {
+        const slots = state.slots.map(s => ({...s}));
+        while (slots.length <= slotIndex) slots.push({service: 'youtubetv', link: ''});
+        slots[slotIndex] = {...slots[slotIndex], service: target.service, link: target.link};
+        const layout = LAYOUTS[state.layout].slots <= slotIndex ? fitLayout(slotIndex + 1) : state.layout;
+        const next = buildCandidate({slots, layout, mode: 'grid'});
+        const picked = next.slots[slotIndex].uid;
+        next.audio = picked;
+        if (next.solo && next.solo !== picked) next.solo = null;
+        state = next;
+        await applyNow().catch(async e => { state.warnings = [`The TV couldn't be updated: ${e.message}`]; await saveState(); });
+      });
       send(res, 200, {state: publicState(), label: target.label, screen: slotIndex + 1});
     } else if (p === '/api/wall/scene' && req.method === 'POST') {
       const b = await readBody(req);
       if (b.remove) {
         config.scenes = config.scenes.filter(s => s.id !== b.remove || s.type === 'aerial');
+        const pin = state.calm.pinned;
+        if (pin && (pin.startsWith('cat:') ? !config.scenes.some(sc => sceneCategory(sc) === pin.slice(4)) : !config.scenes.some(sc => sc.id === pin))) {
+          state = {...state, calm: {...state.calm, pinned: null}};
+          await saveState();
+        }
       } else {
         const video = youtubeId(b.url);
         if (!video) return send(res, 400, {error: 'Paste a YouTube video or live-stream link.'}), true;
@@ -530,21 +701,34 @@ export async function handleWall(req, res, url, port) {
     } else if (p.startsWith('/aerial/')) {
       const id = p.slice(8).replace(/\.mov$/, '');
       const item = /^[A-F0-9-]{36}$/i.test(id) && (await aerials()).find(a => a.id === id);
-      if (!item) { send(res, 404, {error: 'Not found'}); return true; }
-      const {size} = await stat(item.file);
-      const range = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
-      if (range) {
-        const start = range[1] ? Number(range[1]) : size - Number(range[2]);
-        const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
-        res.writeHead(206, {'Content-Type': 'video/quicktime', 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': end - start + 1});
-        createReadStream(item.file, {start, end}).pipe(res);
-      } else {
-        res.writeHead(200, {'Content-Type': 'video/quicktime', 'Accept-Ranges': 'bytes', 'Content-Length': size});
-        createReadStream(item.file).pipe(res);
+      let size;
+      try { if (item) ({size} = await stat(item.file)); } catch {}
+      if (!item || size === undefined) { send(res, 404, {error: 'Not found'}); return true; }
+      const headers = {'Content-Type': 'video/quicktime', 'Accept-Ranges': 'bytes'};
+      let start = 0, end = size - 1, status = 200;
+      const header = req.headers.range;
+      if (header) {
+        const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+        if (m && (m[1] || m[2])) {
+          if (!m[1]) start = Math.max(0, size - Number(m[2]));        // last N bytes
+          else { start = Number(m[1]); if (m[2]) end = Math.min(Number(m[2]), size - 1); }
+          if (start >= size || start > end || (!m[1] && Number(m[2]) === 0)) {
+            res.writeHead(416, {...headers, 'Content-Range': `bytes */${size}`}); res.end(); return true;
+          }
+          status = 206; headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+        } // anything else (e.g. multiple ranges) is ignored and the whole file is sent
       }
+      res.writeHead(status, {...headers, 'Content-Length': end - start + 1});
+      if (req.method === 'HEAD' || size === 0) { res.end(); return true; }
+      const stream = createReadStream(item.file, {start, end});
+      stream.on('error', () => res.destroy());
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
     } else send(res, 404, {error: 'Not found'});
   } catch (e) {
-    if (!res.headersSent) send(res, 400, {error: e.message || 'Request failed'});
+    if (!(e instanceof BadRequest)) console.error(new Date().toISOString(), 'wall request failed', req.method, p, e?.stack || e);
+    if (!res.headersSent) send(res, e instanceof BadRequest ? e.status : 500, {error: e instanceof BadRequest ? e.message : 'Something went wrong on the Mini'});
+    else res.destroy();
   }
   return true;
 }

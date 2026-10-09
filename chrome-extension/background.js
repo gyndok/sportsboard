@@ -38,7 +38,7 @@ async function loop() {
   running = true;
   while (true) {
     try {
-      const res = await fetch(`${BASE}/api/wall/audio?wait=1&v=${version}`, {cache: 'no-store'});
+      const res = await fetch(`${BASE}/api/wall/audio?wait=1&v=${version}`, {cache: 'no-store', headers: {'X-Sportsboard-Helper': '1'}});
       plan = await res.json();
       version = plan.version;
       await enforce();

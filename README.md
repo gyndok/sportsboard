@@ -28,7 +28,7 @@ Run `npm test` for rendering and endpoint validation tests.
 
 Turns a Mac mini connected to a TV into a multi-game wall, a full-screen scoreboard, or a calm ambient screen, all controlled from a phone.
 
-Double-click `Install Autostart.command` once: it installs a LaunchAgent (`com.gyndok.sportsboard`) that starts the server on port 8788 at login, pulls the latest code from GitHub first, and restarts it if it stops. `Restart Sportsboard.command` pulls updates and restarts it on demand. Remove autostart with `./"Install Autostart.command" --remove`. Open `http://<mini-ip>:8788/remote` on your phone; the Terminal window and the remote footer print the address. Sportsboard's header also has a **TV WALL** button.
+Double-click `Install Autostart.command` once: it installs a LaunchAgent (`com.gyndok.sportsboard`) that starts the server on port 8788 at login and restarts it if it stops. At most once an hour on start it runs `update.sh`, which pulls from GitHub and keeps the new version only if `node --test` passes on the Mini; otherwise it rolls back to the running version and skips that commit (`.update-test.log` has the details). `Restart Sportsboard.command` pulls updates and restarts it on demand. Remove autostart with `./"Install Autostart.command" --remove`. Open `http://<mini-ip>:8788/remote` on your phone; the Terminal window and the remote footer print the address. Sportsboard's header also has a **TV WALL** button.
 
 Modes:
 
@@ -53,3 +53,13 @@ One-time setup on the Mini:
 6. Optional: download a few Aerials in System Settings › Wallpaper for Calm mode.
 
 Window control uses `osascript` (JavaScript for Automation) and works only on macOS. Wall changes are accepted only from private-network addresses with a same-origin request. Runtime files `wall-state.json`, `wall-config.json` (your added scenes and schedule) and `log.txt` are not committed. Streaming services limit simultaneous streams per account, so several games from one service at once can hit that limit.
+
+## Reliability notes
+
+- **Bad requests can't stop the server.** Every request runs inside one error boundary. Malformed JSON, a `null` or invalid Origin, oversized bodies and unsupported methods get 400/403/405/413 answers instead of crashing it.
+- **Changes are all-or-nothing.** A change request is validated in full (known fields, layouts, unique screen ids, at most 4 screens, real scene ids) before anything changes. Changes run one at a time.
+- **Settings are saved safely.** They are written to a temporary file and then swapped in. `wall-config.json.last-good` is refreshed on every successful start, and a corrupt file is kept as `.corrupt` while the last good copy is used.
+- **Restart recovery.** After a server, Chrome or Mac restart, the wall forgets windows that no longer show its pages and rebuilds Scoreboard or Calm. It rebuilds Game day only if it was set within the last 6 hours. If an earlier run left the Dock or menu bar hidden, the original settings come back.
+- **Dock and menu bar.** Their original settings are captured before the first change and only those captured values are restored. If they can't be read, they're left alone.
+- **Scores are honest.** The scores panel and the remote say when leagues are unavailable, keep each league's last good data, and show when the server last received scores ("Scores as of …"). The scoreboard follows today across midnight unless you pick another date.
+- **Sound helper detection.** The helper counts as connected only when the extension itself checks in. After updating, click ⟳ on the Sportsboard Sound card in `chrome://extensions`.

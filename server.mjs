@@ -47,8 +47,12 @@ async function details(league,id){
   }catch(error){if(old)return {...old.data,stale:true};throw error;}})();
   detailPending.set(key,task);try{return await task;}finally{detailPending.delete(key);}
 }
-export function createServer(){return http.createServer(async(req,res)=>{
-  const url=new URL(req.url,'http://localhost');
+// Real calendar dates only (YYYYMMDD), within a sane window.
+export function validYmd(d){if(!/^\d{8}$/.test(d||''))return false;const y=+d.slice(0,4),m=+d.slice(4,6),day=+d.slice(6);const t=new Date(Date.UTC(y,m-1,day));return y>=2000&&y<=2100&&t.getUTCMonth()===m-1&&t.getUTCDate()===day;}
+// One boundary for every request: nothing a client sends can take the server down.
+export function createServer(){return http.createServer((req,res)=>{handle(req,res).catch(err=>{console.error(new Date().toISOString(),'request failed',req.method,req.url,err?.stack||err);if(!res.headersSent){res.writeHead(500,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Internal error'}));}else res.destroy();});});}
+async function handle(req,res){
+  let url;try{url=new URL(req.url,'http://localhost');}catch{res.writeHead(400);return res.end('Bad request');}
   res.setHeader('X-Content-Type-Options','nosniff');
   if(url.pathname==='/api/game'){
     res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
@@ -59,12 +63,12 @@ export function createServer(){return http.createServer(async(req,res)=>{
   if(url.pathname==='/api/scores'){
     res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
     const league=url.searchParams.get('league'),date=url.searchParams.get('date');
-    if(!Object.hasOwn(leagues,league) || !/^\d{8}$/.test(date || '')){res.writeHead(400);return res.end(JSON.stringify({error:'Invalid league or date'}));}
+    if(!Object.hasOwn(leagues,league) || !validYmd(date)){res.writeHead(400);return res.end(JSON.stringify({error:'Invalid league or date'}));}
     try{res.end(JSON.stringify(await scores(league,date)));}catch{res.writeHead(502);res.end(JSON.stringify({error:'Unable to reach the score feed. Retrying automatically.'}));}return;
   }
   if(await handleWall(req,res,url,PORT))return;
-  const files={'/remote':['remote.html','text/html'],'/remote.js':['remote.js','text/javascript'],'/calm':['calm.html','text/html'],'/calm.js':['calm.js','text/javascript'],'/sidebar':['sidebar.html','text/html'],'/sidebar.js':['sidebar.js','text/javascript'],'/wall.css':['wall.css','text/css'],'/watch.js':['watch.js','text/javascript'],'/backdrop':['backdrop.html','text/html'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
-  if(!files[url.pathname]){res.writeHead(404);return res.end('Not found');}
+  const files={'/remote':['remote.html','text/html'],'/remote.js':['remote.js','text/javascript'],'/calm':['calm.html','text/html'],'/calm.js':['calm.js','text/javascript'],'/sidebar':['sidebar.html','text/html'],'/sidebar.js':['sidebar.js','text/javascript'],'/wall.css':['wall.css','text/css'],'/watch.js':['watch.js','text/javascript'],'/feed.js':['feed.js','text/javascript'],'/backdrop':['backdrop.html','text/html'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
+  if(!Object.hasOwn(files,url.pathname)){res.writeHead(404);return res.end('Not found');}
   try{const [file,type]=files[url.pathname];res.setHeader('Content-Type',type);res.end(await readFile(new URL(`./public/${file}`,import.meta.url)));}catch{res.writeHead(500);res.end('Unable to load page');}
-});}
-if(process.argv[1]===fileURLToPath(import.meta.url)){await initWall({port:PORT});createServer().listen(PORT,process.env.HOST||'0.0.0.0',()=>console.log(`Sportsboard ready: http://localhost:${PORT}  ·  TV Wall remote: http://localhost:${PORT}/remote`));}
+}
+if(process.argv[1]===fileURLToPath(import.meta.url)){process.on('unhandledRejection',e=>console.error(new Date().toISOString(),'unhandled',e?.stack||e));await initWall({port:PORT});createServer().listen(PORT,process.env.HOST||'0.0.0.0',()=>console.log(`Sportsboard ready: http://localhost:${PORT}  ·  TV Wall remote: http://localhost:${PORT}/remote`));}
