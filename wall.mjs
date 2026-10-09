@@ -193,6 +193,14 @@ const setBounds = (id, r) => osa(`const w=chrome.windows.byId(arg.id);w.bounds={
 const setUrl = (id, url) => osa(`chrome.windows.byId(arg.id).activeTab.url=arg.url;return 'true';`, {id, url});
 const closeWindow = id => osa(`chrome.windows.byId(arg).close();return 'true';`, id);
 const raise = ids => osa(`for(const id of arg){try{chrome.windows.byId(id).index=1;}catch(e){}}chrome.activate();return 'true';`, ids);
+// Re-stack only if something is out of order: the first id (the backdrop) must be
+// behind every other wall window. Returns true when it had to fix the order.
+const fixStacking = ids => osa(`const idx=id=>{try{return chrome.windows.byId(id).index()}catch(e){return null}};
+  const back=idx(arg[0]);if(back===null)return 'false';
+  const bad=arg.slice(1).some(id=>{const i=idx(id);return i!==null&&i>back});
+  if(!bad)return 'false';
+  for(const id of arg){try{chrome.windows.byId(id).index=1;}catch(e){}}chrome.activate();return 'true';`, ids);
+let stackOrder = [];
 
 // Runs inside each stream page: mute/unmute its video and paint the window frame black
 // (Chrome tints an app window's title bar with the page's theme-color).
@@ -280,7 +288,10 @@ async function applyNow() {
   }
   const order = want.map(w => state.windows[w.key]).filter(Boolean);
   const solo = state.solo && state.windows[`slot:${state.solo}`];
-  await raise(solo ? [...order.filter(id => id !== solo), solo] : order).catch(() => {});
+  stackOrder = solo ? [...order.filter(id => id !== solo), solo] : order;
+  await raise(stackOrder).catch(() => {});
+  // Streams that finish loading late can pop their window forward; check again shortly.
+  for (const ms of [3000, 8000]) setTimeout(() => { lock = lock.then(keepStacking).catch(() => {}); }, ms);
   if (clean) await parkPointer(area).catch(() => {});
   state.debug = {area, want: want.map(w => ({key: w.key, id: state.windows[w.key], rect: w.rect})),
     got: await osa(`return JSON.stringify(arg.map(id=>{try{const w=chrome.windows.byId(id);return {id,index:w.index(),b:w.bounds(),title:w.name()}}catch(e){return {id,err:String(e)}}}))`, order).catch(e => String(e))};
@@ -312,9 +323,15 @@ async function applyAudio() {
 }
 
 // Streams sometimes recreate their video element, so re-apply mutes periodically.
+async function keepStacking() {
+  if (state.mode !== 'grid' || !state.windows.backdrop || stackOrder[0] !== state.windows.backdrop) return;
+  await fixStacking(stackOrder).catch(() => {});
+}
+
 function scheduleMuteRefresh() {
   clearInterval(muteTimer);
-  if (state.mode !== 'off') muteTimer = setInterval(() => { lock = lock.then(applyAudio).catch(() => {}); }, 15000);
+  let tick = 0; // every 5s: check stacking; every 15s: also re-apply page mutes/titles
+  if (state.mode !== 'off') muteTimer = setInterval(() => { lock = lock.then(() => (++tick % 3 ? null : applyAudio())).then(keepStacking).catch(() => {}); }, 5000);
 }
 
 function apply() {
