@@ -36,6 +36,15 @@ function render() {
   $('#layouts').innerHTML = Object.entries(wall.layouts).map(([id, l]) =>
     `<button data-layout="${id}" aria-pressed="${s.layout === id}" title="${esc(l.name)}"><span class="mini l-${id}">${layoutIcons[id].map(a => `<i style="grid-area:${incr(a)}"></i>`).join('')}</span><small>${esc(l.name)}</small></button>`).join('');
   $('#sidebar').checked = s.sidebar;
+  const svcName = id => wall.services.find(x => x.id === id)?.name || id;
+  const what = slot => (wall.channels || []).find(c => c.url === slot.link)?.name || (slot.link ? 'Game link' : svcName(slot.service).replace(' / Sunday Ticket', ''));
+  const showing = s.mode === 'grid' ? s.slots.slice(0, wall.layouts[s.layout].slots) : [];
+  $('#sound-bar').innerHTML = showing.length ? showing.map((slot, i) => slot.service === 'sportsboard' ? '' :
+      `<button data-audio="${slot.uid}" aria-pressed="${s.audio === slot.uid}"><b>${s.audio === slot.uid ? '🔊' : '🔈'} ${i + 1}</b><small>${esc(what(slot))}</small></button>`).join('') +
+      `<button data-audio="none" aria-pressed="${s.audio === 'none'}"><b>🔇</b><small>Mute all</small></button>`
+    : '<p class="hint">Start Game day to choose which screen you hear.</p>';
+  $('#sound-hint').hidden = !!wall.soundHelper || s.mode !== 'grid';
+  $('#sound-hint').textContent = 'Sound switching is in basic mode. Install the Sportsboard Sound helper in Chrome on the Mini so only the chosen screen ever plays (see README).';
   $('#clean').checked = s.clean !== false;
 
   const cap = wall.layouts[s.layout].slots;
@@ -81,6 +90,7 @@ $('#layouts').addEventListener('click', e => {
   patch({layout: b.dataset.layout, slots, solo: null});
 });
 $('#clean').addEventListener('change', e => patch({clean: e.target.checked}, e.target.checked ? 'Hiding desktop…' : 'Showing desktop…'));
+$('#sound-bar').addEventListener('click', e => { const b = e.target.closest('[data-audio]'); if (b) patch({audio: b.dataset.audio}, 'Switching sound…'); });
 $('#sidebar').addEventListener('change', e => patch({sidebar: e.target.checked}));
 $('#slots').addEventListener('click', e => {
   const b = e.target.closest('button[data-act]'); if (!b) return;

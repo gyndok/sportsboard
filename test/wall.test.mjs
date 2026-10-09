@@ -64,3 +64,15 @@ test('calm rotates a pinned category and skips unplayable scenes', () => withSer
   assert.equal((await (await fetch(`${base}/api/wall`)).json()).state.calm.pinned, null);
   for (const id of ['yt-aaaaaaaaaaa', 'yt-bbbbbbbbbbb']) await post('/api/wall/scene', {remove: id});
 }));
+
+test('sound helper gets a plan and long-polls for changes', () => withServer(async base => {
+  const plan = await (await fetch(`${base}/api/wall/audio`)).json();
+  assert.equal(typeof plan.version, 'number');
+  assert.ok(Array.isArray(plan.wall));
+  const t = Date.now();
+  const waited = await (await fetch(`${base}/api/wall/audio?wait=1&v=${plan.version + 999}`)).json();
+  assert.ok(Date.now() - t < 2000, 'a stale version returns immediately');
+  assert.equal(waited.version, plan.version);
+  assert.equal((await (await fetch(`${base}/api/wall`)).json()).soundHelper, true);
+  assert.equal((await fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({audio: 'none'})})).status, 200);
+}));
