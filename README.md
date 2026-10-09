@@ -42,6 +42,8 @@ Modes:
 
 One-time setup on the Mini:
 
+0. **Sportsboard Sound helper** (exclusive sound): in Chrome open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and pick `~/sportsboard/chrome-extension`. It uses Chrome's tab mute, which streaming players can't override, so only the screen chosen under **Sound from** on the remote plays; the other wall screens are muted and your own Chrome windows are never touched. Without it, the wall falls back to muting video elements inside each page, which some players undo.
+
 1. Allow Terminal to control Google Chrome and System Events when macOS asks.
 2. In Chrome, turn on View › Developer › Allow JavaScript from Apple Events (used for audio switching and blank titles).
 3. Chrome › Settings › Appearance › Mode › Dark (dark title bars).

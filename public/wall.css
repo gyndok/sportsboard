@@ -80,3 +80,7 @@ body.busy main{opacity:.6;pointer-events:none}
 .scene-group summary small{color:var(--muted);margin-left:6px}.scene-group summary b{color:var(--teal)}
 .scene-group .scenes{padding:0 10px 12px}
 .scene-group .scenes button{text-transform:none;font-size:12px}
+.sound-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:6px}
+.sound-bar button{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 6px;min-height:64px}
+.sound-bar button b{font-size:18px}.sound-bar button small{font-size:10px;text-transform:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sound-bar button[aria-pressed=true]{background:#123a31;border-color:var(--teal);color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}

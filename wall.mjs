@@ -119,6 +119,22 @@ let base = 'http://127.0.0.1:8787';
 let lock = Promise.resolve();
 let muteTimer = null;
 
+// ---------- sound helper (Chrome extension in ./chrome-extension) ----------
+// The extension long-polls /api/wall/audio and uses Chrome's tab mute, which web
+// players can't override. Page-level muting is only the fallback without it.
+let audioVersion = 0, helperSeen = 0;
+const audioWaiters = new Set();
+const helperActive = () => Date.now() - helperSeen < 90000;
+function bumpAudio() { audioVersion++; for (const w of audioWaiters) w(); audioWaiters.clear(); }
+function audioPlan() {
+  if (state.mode !== 'grid') return {version: audioVersion, active: false, wall: []};
+  const rectOf = key => state.actual?.[key] || null;
+  const wall = visibleSlots().map(s => ({key: `slot:${s.uid}`, audio: s.uid === state.audio, rect: rectOf(`slot:${s.uid}`)}))
+    .concat(state.sidebar ? [{key: 'sidebar', audio: false, rect: rectOf('sidebar')}] : [])
+    .filter(w => w.rect);
+  return {version: audioVersion, active: true, audio: state.audio, wall};
+}
+
 async function loadJson(file, fallback) {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; }
 }
@@ -261,6 +277,9 @@ async function applyNow() {
   if (clean) await parkPointer(area).catch(() => {});
   state.debug = {area, want: want.map(w => ({key: w.key, id: state.windows[w.key], rect: w.rect})),
     got: await osa(`return JSON.stringify(arg.map(id=>{try{const w=chrome.windows.byId(id);return {id,index:w.index(),b:w.bounds(),title:w.name()}}catch(e){return {id,err:String(e)}}}))`, order).catch(e => String(e))};
+  // Where each wall window actually ended up (macOS may clamp what we asked for).
+  const gotById = Object.fromEntries((Array.isArray(state.debug.got) ? state.debug.got : []).filter(g => g.b).map(g => [g.id, g.b]));
+  state.actual = Object.fromEntries(want.map(w => [w.key, gotById[state.windows[w.key]] || w.rect]));
   warnings.push(...await applyAudio());
   state.warnings = warnings;
   await saveState();
@@ -268,13 +287,15 @@ async function applyNow() {
 }
 
 async function applyAudio() {
+  bumpAudio(); // wakes the sound helper so it re-applies tab mutes right away
   if (state.mode === 'off') return [];
   const visible = state.mode === 'grid' ? visibleSlots().filter(s => s.service !== 'sportsboard') : [];
-  if (state.mode === 'grid' && !visible.some(s => s.uid === state.audio)) state.audio = visible[0]?.uid || null;
-  const streamKeys = new Set(visible.map(s => `slot:${s.uid}`));
+  if (state.mode === 'grid' && state.audio !== 'none' && !visible.some(s => s.uid === state.audio)) state.audio = visible[0]?.uid || null;
+  // With the helper, keep every page's own video unmuted and let Chrome's tab mute decide.
+  const helper = helperActive();
   const list = Object.entries(state.windows).map(([key, id]) => {
     const slot = visible.find(s => `slot:${s.uid}` === key);
-    return {id, muted: slot ? slot.uid !== state.audio : null};
+    return {id, muted: slot ? (helper ? false : slot.uid !== state.audio) : null};
   }).filter(x => x.id);
   try {
     const errs = await setMutes(list);
@@ -381,7 +402,7 @@ function mergePatch(p) {
     });
   }
   const uids = new Set(state.slots.map(s => s.uid));
-  if (p.audio !== undefined) state.audio = uids.has(p.audio) ? p.audio : null;
+  if (p.audio !== undefined) state.audio = p.audio === 'none' ? 'none' : uids.has(p.audio) ? p.audio : null;
   if (p.solo !== undefined) state.solo = uids.has(p.solo) ? p.solo : null;
   if (!uids.has(state.solo)) state.solo = null;
   if (p.calm) {
@@ -405,7 +426,14 @@ export async function handleWall(req, res, url, port) {
   }
   try {
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {state: publicState(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length});
+      send(res, 200, {state: publicState(), soundHelper: helperActive(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length});
+    } else if (p === '/api/wall/audio') {
+      helperSeen = Date.now();
+      const since = Number(url.searchParams.get('v'));
+      if (url.searchParams.has('wait') && since === audioVersion) {
+        await new Promise(resolve => { const done = () => { clearTimeout(t); audioWaiters.delete(done); resolve(); }; const t = setTimeout(done, 25000); audioWaiters.add(done); req.on('close', done); });
+      }
+      if (!res.writableEnded && !res.destroyed) send(res, 200, audioPlan());
     } else if (p === '/api/wall' && req.method === 'POST') {
       mergePatch(await readBody(req));
       const calmOnly = state.mode === 'calm' && state.windows.calm && (state.clean && state.mode !== 'off') === cleanApplied;
