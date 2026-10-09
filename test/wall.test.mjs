@@ -76,3 +76,22 @@ test('sound helper gets a plan and long-polls for changes', () => withServer(asy
   assert.equal((await (await fetch(`${base}/api/wall`)).json()).soundHelper, true);
   assert.equal((await fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({audio: 'none'})})).status, 200);
 }));
+
+test('every layout keeps game tiles 16:9 and inside the screen', async () => {
+  const {layoutPlan, LAYOUTS} = await import('../wall.mjs');
+  for (const area of [{x: 0, y: 0, width: 2560, height: 1440}, {x: 0, y: 28, width: 1920, height: 1052}]) {
+    for (const layout of Object.keys(LAYOUTS)) for (const scores of [false, true]) {
+      const {tiles, scores: panel} = layoutPlan(layout, area, scores);
+      assert.equal(tiles.length, LAYOUTS[layout].slots, layout);
+      const boxes = [...tiles, ...(panel ? [panel] : [])];
+      for (const t of tiles) assert.ok(Math.abs(t.width / t.height - 16 / 9) < 0.01, `${layout} tile is 16:9`);
+      for (const b of boxes) assert.ok(b.x >= area.x - 1 && b.y >= area.y - 1 && b.x + b.width <= area.x + area.width + 1 && b.y + b.height <= area.y + area.height + 1, `${layout} fits`);
+      for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+        const [p, q] = [boxes[i], boxes[j]];
+        const overlap = Math.min(p.x + p.width, q.x + q.width) - Math.max(p.x, q.x) > 2 && Math.min(p.y + p.height, q.y + q.height) - Math.max(p.y, q.y) > 2;
+        assert.ok(!overlap, `${layout}${scores ? '+scores' : ''} boxes ${i},${j} don't overlap`);
+      }
+      assert.equal(!!panel, scores, `${layout} scores panel only when asked`);
+    }
+  }
+});
