@@ -84,3 +84,12 @@ body.busy main{opacity:.6;pointer-events:none}
 .sound-bar button{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 6px;min-height:64px}
 .sound-bar button b{font-size:18px}.sound-bar button small{font-size:10px;text-transform:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sound-bar button[aria-pressed=true]{background:#123a31;border-color:var(--teal);color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
+/* scores panel laid out wide (bottom band) instead of tall */
+@media (min-aspect-ratio: 3/2){
+  .side{flex-direction:row;border-left:0;border-top:2px solid var(--teal)}
+  .side header{width:210px;flex:none;border-bottom:0;border-right:1px solid var(--line);padding-top:18px}
+  .side footer{display:none}
+  .side .time{white-space:nowrap;font-size:30px}
+  .side .track{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));column-gap:22px;align-content:start}
+  .side h3{grid-column:1/-1;margin-top:10px}
+}

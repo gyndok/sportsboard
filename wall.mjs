@@ -78,17 +78,26 @@ export const LAYOUTS = {
   main3: {name: '1 big + 3', slots: 4}
 };
 
-function layoutRects(layout, a) {
+// Every game tile is exactly 16:9 so the video fills it edge to edge. Layouts are
+// laid out on the largest 16:9 canvas that fits the screen; on a 16:9 canvas a
+// tile whose width and height fractions are equal is itself 16:9. The scores
+// panel takes the space the games leave over; without it the games are centered.
+export function layoutPlan(layout, area, scores = false) {
+  const cw = Math.min(area.width, area.height * 16 / 9), ch = cw * 9 / 16;
+  const a = {x: area.x + (area.width - cw) / 2, y: area.y + (area.height - ch) / 2, width: cw, height: ch};
   const R = (fx, fy, fw, fh) => ({x: Math.round(a.x + a.width * fx), y: Math.round(a.y + a.height * fy), width: Math.round(a.width * fw), height: Math.round(a.height * fh)});
-  const t = 1 / 3;
-  return {
-    single: [R(0, 0, 1, 1)],
-    side: [R(0, 0, .5, 1), R(.5, 0, .5, 1)],
-    three: [R(0, 0, .5, .5), R(.5, 0, .5, .5), R(.25, .5, .5, .5)],
-    grid: [R(0, 0, .5, .5), R(.5, 0, .5, .5), R(0, .5, .5, .5), R(.5, .5, .5, .5)],
-    main2: [R(0, 0, 2 * t, 1), R(2 * t, 0, t, .5), R(2 * t, .5, t, .5)],
-    main3: [R(0, 0, 2 * t, 1), R(2 * t, 0, t, t), R(2 * t, t, t, t), R(2 * t, 2 * t, t, t)]
-  }[layout] || [R(0, 0, 1, 1)];
+  const t = 1 / 3, plans = {
+    single: () => scores ? {tiles: [R(0, .1, .8, .8)], scores: R(.8, 0, .2, 1)} : {tiles: [R(0, 0, 1, 1)]},
+    side: () => ({tiles: [R(0, scores ? 0 : .25, .5, .5), R(.5, scores ? 0 : .25, .5, .5)], scores: scores ? R(0, .5, 1, .5) : null}),
+    three: () => ({tiles: [R(0, 0, .5, .5), R(.5, 0, .5, .5), R(scores ? 0 : .25, .5, .5, .5)], scores: scores ? R(.5, .5, .5, .5) : null}),
+    grid: () => scores
+      ? {tiles: [R(0, .1, .4, .4), R(.4, .1, .4, .4), R(0, .5, .4, .4), R(.4, .5, .4, .4)], scores: R(.8, 0, .2, 1)}
+      : {tiles: [R(0, 0, .5, .5), R(.5, 0, .5, .5), R(0, .5, .5, .5), R(.5, .5, .5, .5)]},
+    main2: () => { const y = scores ? 0 : 1 / 6; return {tiles: [R(0, y, 2 * t, 2 * t), R(2 * t, y, t, t), R(2 * t, y + t, t, t)], scores: scores ? R(0, 2 * t, 1, t) : null}; },
+    main3: () => ({tiles: [R(0, scores ? 0 : 1 / 6, 2 * t, 2 * t), R(2 * t, 0, t, t), R(2 * t, t, t, t), R(2 * t, 2 * t, t, t)], scores: scores ? R(0, 2 * t, 2 * t, t) : null})
+  };
+  const plan = (plans[layout] || plans.single)();
+  return {tiles: plan.tiles, scores: plan.scores || null, canvas: R(0, 0, 1, 1)};
 }
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -220,14 +229,9 @@ const visibleSlots = () => state.slots.slice(0, LAYOUTS[state.layout]?.slots || 
 function desiredWindows(area) {
   const want = [];
   if (state.mode === 'grid') {
-    let gridArea = area;
-    if (state.sidebar) {
-      const sw = Math.round(area.width * (config.sidebarWidth || .2));
-      gridArea = {...area, width: area.width - sw};
-      want.push({key: 'sidebar', url: `${base}/sidebar`, rect: {x: area.x + gridArea.width, y: area.y, width: sw, height: area.height}});
-    }
-    const rects = layoutRects(state.layout, gridArea);
-    visibleSlots().forEach((s, i) => want.push({key: `slot:${s.uid}`, slot: s, url: resolveUrl(serviceUrl(s)), rect: state.solo === s.uid ? gridArea : rects[i]}));
+    const plan = layoutPlan(state.layout, area, state.sidebar);
+    if (plan.scores) want.push({key: 'sidebar', url: `${base}/sidebar`, rect: plan.scores});
+    visibleSlots().forEach((s, i) => want.push({key: `slot:${s.uid}`, slot: s, url: resolveUrl(serviceUrl(s)), rect: state.solo === s.uid ? plan.canvas : plan.tiles[i]}));
   } else if (state.mode === 'sportsboard') {
     want.push({key: 'main', url: `${base}/`, rect: area});
   } else if (state.mode === 'calm') {
@@ -248,11 +252,12 @@ async function applyNow() {
   }
   const area = await screenArea();
   const live = new Set(await windowIds());
-  const want = desiredWindows(area);
+  // In clean mode the top row's title bars sit in a thin strip at the top of the
+  // screen (macOS won't place windows above it), so lay the games out below that
+  // strip; lower rows tuck their title bars under the window above.
+  const tb = config.titlebar ?? 28;
+  const want = desiredWindows(clean ? {...area, y: area.y + tb, height: area.height - tb} : area);
   if (clean) {
-    // Tuck each window's title bar out of sight: above the screen for the top row,
-    // under the window above it for lower rows (those are raised last, see below).
-    const tb = config.titlebar ?? 28;
     for (const w of want) w.rect = {...w.rect, y: w.rect.y - tb, height: w.rect.height + tb};
     want.sort((a, b) => b.rect.y - a.rect.y);
   }

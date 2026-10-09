@@ -33,7 +33,8 @@ Double-click `Install Autostart.command` once: it installs a LaunchAgent (`com.g
 Modes:
 
 - **Game day**: tiles 1–4 Chrome app windows (single, 2 side by side, 3, 2 × 2, 1 big + 2, 1 big + 3). Each screen picks a service (YouTube TV / Sunday Ticket, Peacock, Paramount+, Prime Video, Apple TV, Sportsboard) or a pasted game link. 🔊 picks the one screen with sound, ⤢ fills the screen with one game, and ⬆ promotes a game to the big screen. Layout and sidebar changes move windows without reloading streams.
-- **Scores sidebar**: an optional right-hand column with a clock and live, upcoming and final scores (starred teams first). It scrolls slowly when long.
+- **Scores panel**: a clock plus live, upcoming and final scores (starred teams first) placed in the space the games leave over (bottom band, corner or side column depending on the layout). It switches to a multi-column layout when wide and scrolls slowly when long.
+- **16:9 tiles**: every game window is sized to exactly 16:9 so video fills it; without the scores panel the games are centered.
 - **Channel presets**: put a YouTube TV channel on a screen and tap 💾 on that screen to save it as a button under **My channels** (name it the way the scoreboard shows the network, e.g. `FS1`; add other spellings after commas). Tap a saved channel to send it to any screen.
 - **Watch buttons**: every live or upcoming game on the scoreboard, and in the remote's **Games today** list, shows its network (📺 FS1). Tap it and pick a screen; the game's network is matched to your saved channels (Peacock, Prime, Apple TV and Paramount+ games open that app). The chosen screen gets the sound.
 - **Scoreboard**: Sportsboard full screen.
