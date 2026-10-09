@@ -10,3 +10,9 @@ wall-state.json
 wall-config.json
 log.txt
 *.bak-*
+.last-update-check
+.update-rejected
+.update-test.log
+*.tmp-*
+*.last-good
+*.corrupt

@@ -156,15 +156,15 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('wall-changed', () => setTimeout(load, 300));
 
-const leagues = ['NFL', 'NCAAF', 'MLB', 'NBA', 'NHL'];
 async function loadGames() {
-  const d = new Date(), ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-  const all = (await Promise.all(leagues.map(l => fetch(`/api/scores?league=${l}&date=${ymd}`).then(r => r.json()).then(x => (x.events || []).map(e => ({...e, league: l}))).catch(() => [])))).flat()
+  const feed = await ScoreFeed.load();
+  const all = feed.events
     .filter(e => e.state !== 'post').sort((a, b) => (a.state === 'in' ? 0 : 1) - (b.state === 'in' ? 0 : 1) || Date.parse(a.date) - Date.parse(b.date));
   $('#games').innerHTML = all.length ? all.map(e => `<div class="game-row"><span class="gl">${e.state === 'in' ? '<b>LIVE</b>' : new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})} · ${esc(e.league)}</span>
       <span class="gt">${esc(e.teams.map(t => t.abbr + (e.state === 'in' ? ' ' + t.score : '')).join(' @ '))}</span>
       ${e.broadcast ? `<button class="watch-chip" data-watch="${esc(e.broadcast)}" data-title="${esc(e.teams.map(t => t.abbr).join(' @ '))}">📺 ${esc(e.broadcast)}</button>` : '<span class="hint">No TV listed</span>'}</div>`).join('')
-    : '<p class="hint">No more games today.</p>';
+    : `<p class="hint">${esc(ScoreFeed.emptyText(feed, 'No more games today.'))}</p>`;
+  if (!feed.complete) $('#games').insertAdjacentHTML('beforeend', `<p class="warn">${esc(ScoreFeed.note(feed))}</p>`);
 }
 loadGames(); setInterval(loadGames, 60000);
 

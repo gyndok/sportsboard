@@ -38,9 +38,11 @@ $('#board').addEventListener('click',e=>{
 });
 $('#leagues').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;selected=b.dataset.league;$('#leagues').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));render();});
 $('#filters').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;filter=b.dataset.state;$('#filters').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));render();});
-$('#date').onchange=()=>{if($('#date').value)refresh(true);};
-function shift(n){const d=new Date($('#date').value+'T12:00:00');d.setDate(d.getDate()+n);$('#date').value=localDate(d);refresh(true);}
-$('#previous').onclick=()=>shift(-1);$('#next').onclick=()=>shift(1);$('#reset').onclick=()=>{$('#date').value=localDate();refresh(true);};$('#refresh').onclick=()=>refresh();
+// Follow today across midnight unless a different date was picked; Today resumes it.
+let followToday=true;
+$('#date').onchange=()=>{if($('#date').value){followToday=$('#date').value===localDate();refresh(true);}};
+function shift(n){const d=new Date($('#date').value+'T12:00:00');d.setDate(d.getDate()+n);$('#date').value=localDate(d);followToday=$('#date').value===localDate();refresh(true);}
+$('#previous').onclick=()=>shift(-1);$('#next').onclick=()=>shift(1);$('#reset').onclick=()=>{followToday=true;$('#date').value=localDate();refresh(true);};$('#refresh').onclick=()=>refresh();
 $('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{$('#summary').textContent='Full screen is unavailable in this browser.';}};
 document.addEventListener('fullscreenchange',()=>{$('#fullscreen').textContent=document.fullscreenElement?'Exit full screen ↙':'Full screen ↗';});
-refresh();setInterval(()=>refresh(),30000);
+refresh();setInterval(()=>{if(followToday&&$('#date').value!==localDate()){$('#date').value=localDate();refresh(true);}else refresh();},30000);
