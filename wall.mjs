@@ -297,15 +297,41 @@ const fixStacking = ids => osa(`const idx=id=>{try{return chrome.windows.byId(id
   for(const id of arg){try{chrome.windows.byId(id).index=1;}catch(e){}}chrome.activate();return 'true';`, ids);
 let stackOrder = [];
 
+// Regular YouTube pages (not YouTube TV) on a wall screen show only the video: the
+// page's own player is pinned over the whole window, so the search bar, title, live
+// chat and comments stay out of sight while YouTube Premium, sign-in and live streams
+// keep working. Escape in that window toggles the normal page back for browsing.
+// Ancestors of the player are neutralised so nothing traps or covers the fixed player.
+const YT_CSS = [
+  'html.wall-yt,html.wall-yt body{overflow:hidden!important;background:#000!important}',
+  'html.wall-yt #masthead-container,html.wall-yt ytd-masthead{display:none!important}',
+  'html.wall-yt .wall-yt-anc{transform:none!important;filter:none!important;backdrop-filter:none!important;perspective:none!important;contain:none!important;container-type:normal!important;will-change:auto!important;z-index:auto!important;isolation:auto!important;opacity:1!important}',
+  'html.wall-yt .wall-yt-player{position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;margin:0!important;border-radius:0!important;z-index:2100!important;background:#000!important}',
+  'html.wall-yt .wall-yt-player video.html5-main-video{left:0!important;top:0!important;width:100vw!important;height:100vh!important;object-fit:contain!important}',
+  'html.wall-yt tp-yt-paper-dialog,html.wall-yt tp-yt-iron-overlay-backdrop,html.wall-yt tp-yt-iron-dropdown{z-index:2147483000!important}'
+].join('');
+export const YT_JS = `if(/(^|\\.)youtube\\.com$/.test(location.hostname)&&location.hostname!=='tv.youtube.com'){
+if(!window.__wallYT){const css=document.createElement('style');css.textContent=${JSON.stringify(YT_CSS)};document.documentElement.appendChild(css);
+const w=window.__wallYT={off:false,sync(){const d=document.documentElement,path=location.pathname,watch=path==='/watch'||path.startsWith('/live/');
+const p=watch&&!w.off?(document.querySelector('ytd-watch-flexy #movie_player,ytd-watch-grid #movie_player,#player #movie_player')||document.querySelector('#movie_player')):null;
+document.querySelectorAll('.wall-yt-player,.wall-yt-anc').forEach(x=>{if(x!==p&&!(p&&x.contains(p)))x.classList.remove('wall-yt-player','wall-yt-anc')});
+if(p){p.classList.add('wall-yt-player');for(let a=p.parentElement;a&&a!==d;a=a.parentElement)a.classList.add('wall-yt-anc');}
+if(d.classList.contains('wall-yt')!==!!p){d.classList.toggle('wall-yt',!!p);dispatchEvent(new Event('resize'));setTimeout(()=>dispatchEvent(new Event('resize')),600);}}};
+document.addEventListener('yt-navigate-finish',()=>setTimeout(()=>w.sync(),300));
+addEventListener('keydown',e=>{if(e.key==='Escape'&&!document.fullscreenElement){w.off=!w.off;w.sync();}},true);}
+window.__wallYT.sync();}`;
+
 // Runs inside each stream page: mute/unmute its video and paint the window frame black
 // (Chrome tints an app window's title bar with the page's theme-color).
-const PAGE_JS = `(()=>{const mute=__MUTED__;if(mute!==null)document.querySelectorAll('video,audio').forEach(m=>{m.muted=mute});
+export const PAGE_JS = `(()=>{const mute=__MUTED__;if(mute!==null)document.querySelectorAll('video,audio').forEach(m=>{m.muted=mute});
 if(__CLEAN__&&!window.__wallTitle){window.__wallTitle=1;const B='\\u2800';const blank=()=>{if(document.title!==B)document.title=B;};blank();
 new MutationObserver(blank).observe(document.head,{childList:true,subtree:true,characterData:true});}
 let t=document.querySelector('meta[name=theme-color][data-wall]');
 document.querySelectorAll('meta[name=theme-color]:not([data-wall])').forEach(m=>m.remove());
 if(!t){t=document.createElement('meta');t.name='theme-color';t.dataset.wall='1';document.head.appendChild(t);}
-t.content='#000000';return 'ok';})()`;
+t.content='#000000';
+${YT_JS}
+return 'ok';})()`;
 async function setMutes(list) {
   if (!list.length) return [];
   return osa(`const errs=[];for(const it of arg.list){try{chrome.windows.byId(it.id).activeTab.execute({javascript:arg.js.replace('__MUTED__',String(it.muted)).replace('__CLEAN__',String(arg.clean))});}catch(e){errs.push(String(e))}}return JSON.stringify(errs);`, {list, js: PAGE_JS, clean: state.clean && state.mode !== 'off'});
@@ -399,8 +425,9 @@ async function applyNow() {
   const solo = state.solo && state.windows[`slot:${state.solo}`];
   stackOrder = solo ? [...order.filter(id => id !== solo), solo] : order;
   await raise(stackOrder).catch(() => {});
-  // Streams that finish loading late can pop their window forward; check again shortly.
-  for (const ms of [3000, 8000]) setTimeout(() => { lock = lock.then(keepStacking).catch(() => {}); }, ms);
+  // Streams that finish loading late can pop their window forward, and need the page
+  // script (mutes, black frame, video-only YouTube); run both again shortly.
+  for (const ms of [3000, 8000]) setTimeout(() => { lock = lock.then(applyAudio).then(keepStacking).catch(() => {}); }, ms);
   if (clean) await parkPointer(area).catch(() => {});
   state.debug = {area, want: want.map(w => ({key: w.key, id: state.windows[w.key], rect: w.rect})),
     got: await osa(`return JSON.stringify(arg.map(id=>{try{const w=chrome.windows.byId(id);return {id,index:w.index(),b:w.bounds(),title:w.name(),url:w.activeTab.url()}}catch(e){return {id,err:String(e)}}}))`, order).catch(e => String(e))};
