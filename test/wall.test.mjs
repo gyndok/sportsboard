@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from '../server.mjs';
+import {PAGE_JS, YT_JS} from '../wall.mjs';
 import os from 'node:os';
 import {mkdtemp, mkdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
@@ -236,3 +237,14 @@ test('deleting the pinned scene clears the pin', () => withServer(async base => 
   await post('/api/wall/scene', {remove: 'yt-ccccccccccc'});
   assert.equal((await (await fetch(`${base}/api/wall`)).json()).state.calm.pinned, null);
 }));
+
+test('the page script compiles and only reshapes regular YouTube pages', () => {
+  const js = PAGE_JS.replace('__MUTED__', 'null').replace('__CLEAN__', 'true');
+  assert.doesNotThrow(() => new Function('return ' + js), 'page script is valid JavaScript');
+  assert.ok(js.includes(YT_JS), 'video-only YouTube is part of the page script');
+  const host = YT_JS.match(/^if\(\/(.+?)\/\.test/)[1];
+  const re = new RegExp(host);
+  for (const h of ['www.youtube.com', 'youtube.com', 'm.youtube.com']) assert.ok(re.test(h) && h !== 'tv.youtube.com', h);
+  assert.ok(YT_JS.includes("location.hostname!=='tv.youtube.com'"), 'YouTube TV is left alone');
+  for (const h of ['notyoutube.com', 'youtube.com.evil.net', 'peacocktv.com']) assert.ok(!re.test(h), h);
+});
