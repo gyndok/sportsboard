@@ -301,17 +301,24 @@ let stackOrder = [];
 // page's own player is pinned over the whole window, so the search bar, title, live
 // chat and comments stay out of sight while YouTube Premium, sign-in and live streams
 // keep working. Escape in that window toggles the normal page back for browsing.
-// Ancestors of the player are neutralised so nothing traps or covers the fixed player.
+// Ancestors of the player are neutralised so nothing traps the fixed player, and
+// everything that isn't the player (or a YouTube dialog) is made invisible: some
+// layouts, like theater mode, stack the title and buttons above it otherwise.
 const YT_CSS = [
   'html.wall-yt,html.wall-yt body{overflow:hidden!important;background:#000!important}',
   'html.wall-yt #masthead-container,html.wall-yt ytd-masthead{display:none!important}',
+  'html.wall-yt .wall-yt-anc>:not(.wall-yt-anc):not(.wall-yt-player):not(ytd-popup-container):not(tp-yt-paper-dialog):not(tp-yt-iron-dropdown):not(tp-yt-iron-overlay-backdrop){visibility:hidden!important}',
+  'html.wall-yt .wall-yt-player{visibility:visible!important}',
+  'html.wall-yt .wall-yt-player :is(.ytp-ce-element,.ytp-cards-teaser,.ytp-pause-overlay,.branding-img-container,.iv-branding,.ytp-paid-content-overlay,[class*="fullscreen-grid"]){display:none!important}',
   'html.wall-yt .wall-yt-anc{transform:none!important;filter:none!important;backdrop-filter:none!important;perspective:none!important;contain:none!important;container-type:normal!important;will-change:auto!important;z-index:auto!important;isolation:auto!important;opacity:1!important}',
   'html.wall-yt .wall-yt-player{position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;margin:0!important;border-radius:0!important;z-index:2100!important;background:#000!important}',
   'html.wall-yt .wall-yt-player video.html5-main-video{left:0!important;top:0!important;width:100vw!important;height:100vh!important;object-fit:contain!important}',
   'html.wall-yt tp-yt-paper-dialog,html.wall-yt tp-yt-iron-overlay-backdrop,html.wall-yt tp-yt-iron-dropdown{z-index:2147483000!important}'
 ].join('');
 export const YT_JS = `if(/(^|\\.)youtube\\.com$/.test(location.hostname)&&location.hostname!=='tv.youtube.com'){
-if(!window.__wallYT){const css=document.createElement('style');css.textContent=${JSON.stringify(YT_CSS)};document.documentElement.appendChild(css);
+let css=document.getElementById('wall-yt-css');if(!css){css=document.createElement('style');css.id='wall-yt-css';document.documentElement.appendChild(css);}
+const C=${JSON.stringify(YT_CSS)};if(css.textContent!==C)css.textContent=C;
+if(!window.__wallYT){
 const w=window.__wallYT={off:false,sync(){const d=document.documentElement,path=location.pathname,watch=path==='/watch'||path.startsWith('/live/');
 const p=watch&&!w.off?(document.querySelector('ytd-watch-flexy #movie_player,ytd-watch-grid #movie_player,#player #movie_player')||document.querySelector('#movie_player')):null;
 document.querySelectorAll('.wall-yt-player,.wall-yt-anc').forEach(x=>{if(x!==p&&!(p&&x.contains(p)))x.classList.remove('wall-yt-player','wall-yt-anc')});
