@@ -14,6 +14,9 @@ async function withServer(fn) {
 
 test('wall pages and state are served', () => withServer(async base => {
   for (const path of ['/remote', '/calm', '/sidebar', '/wall.css', '/remote.js']) assert.equal((await fetch(base + path)).status, 200, path);
+  for (const path of ['/', '/?tv=1', '/app.js', '/style.css']) assert.equal((await fetch(base + path)).status, 200, path);
+  const font = await fetch(base + '/fonts/roboto-condensed-700.woff2');
+  assert.equal(font.status, 200); assert.equal(font.headers.get('content-type'), 'font/woff2');
   const d = await (await fetch(`${base}/api/wall`)).json();
   assert.ok(d.layouts.grid && d.layouts.main3);
   assert.ok(Array.isArray(d.services) && d.services.some(s => s.id === 'sportsboard'));

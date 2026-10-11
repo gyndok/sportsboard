@@ -8,7 +8,37 @@ const cache = new Map();
 const pending = new Map();
 export function normalize(e) {
   const c=e.competitions?.[0] || {}, s=c.status || e.status || {};
-  return {id:e.id,date:e.date,name:e.name,state:s.type?.state || 'pre',completed:!!s.type?.completed,status:s.type?.shortDetail || s.type?.description || 'Scheduled',venue:c.venue?.fullName || '',broadcast:(c.broadcasts || []).flatMap(b=>b.names || []).join(' / '),teams:[...(c.competitors || [])].sort((a,b)=>(a.homeAway==='away'?-1:1)-(b.homeAway==='away'?-1:1)).map(t=>({name:t.team?.displayName || 'TBD',abbr:t.team?.abbreviation || 'TBD',score:t.score ?? '0',home:t.homeAway==='home',record:t.records?.find(r=>r.type==='total')?.summary || '',rank:t.curatedRank?.current<26?t.curatedRank.current:null}))};
+  const teams=[...(c.competitors || [])].sort((a,b)=>(a.homeAway==='away'?-1:1)-(b.homeAway==='away'?-1:1)).map(t=>({name:t.team?.displayName || 'TBD',short:t.team?.shortDisplayName || t.team?.displayName || 'TBD',abbr:t.team?.abbreviation || 'TBD',score:t.score ?? '0',home:t.homeAway==='home',record:t.records?.find(r=>r.type==='total')?.summary || '',rank:t.curatedRank?.current<26?t.curatedRank.current:null}));
+  return {id:e.id,date:e.date,name:e.name,state:s.type?.state || 'pre',completed:!!s.type?.completed,status:s.type?.shortDetail || s.type?.description || 'Scheduled',venue:c.venue?.fullName || '',broadcast:(c.broadcasts || []).flatMap(b=>b.names || []).join(' / '),teams,odds:oddsOf(c.odds,teams)};
+}
+// Betting lines for the sportsbook-style board, from the first odds provider ESPN lists.
+// ESPN has used two shapes: newer {moneyline,pointSpread,total} objects with open/close
+// strings, and older numeric {awayTeamOdds.moneyLine, spread, overUnder}. Both are read.
+// Returns {fav:'away'|'home'|null, line, total, ml:{away,home}} or null; any part may be null.
+export function oddsOf(list,teams){
+  const o=Array.isArray(list)?list[0]:null;
+  if(!o||typeof o!=='object')return null;
+  const num=v=>{const n=parseFloat(String(v??'').trim().replace(/^[ou]/i,''));return Number.isFinite(n)?n:null;};
+  const side=x=>x&&typeof x==='object'?(x.close||x.current||x.open||null):null;
+  const ml=v=>{if(v==null||v==='')return null;const t=String(v).trim().toUpperCase();if(/^EV(EN)?$/.test(t))return 'EV';const n=Number(t);if(!Number.isFinite(n)||Math.abs(n)<100)return null;return Math.abs(n)===100?'EV':(n>0?'+':'')+Math.round(n);};
+  const money={away:ml(side(o.moneyline?.away)?.odds??o.awayTeamOdds?.moneyLine),home:ml(side(o.moneyline?.home)?.odds??o.homeTeamOdds?.moneyLine)};
+  const total=num(o.overUnder)??num(side(o.total?.over)?.line);
+  let fav=null,line=null;
+  const homeLine=num(side(o.pointSpread?.home)?.line);
+  const details=String(o.details||'').trim(), m=details.match(/^(.+?)\s+([+-]?\d+(?:\.\d+)?)$/);
+  if(homeLine!==null){line=Math.abs(homeLine);fav=homeLine<0?'home':homeLine>0?'away':null;}
+  else if(/^(even|pk|pick|pick'?em)$/i.test(details))line=0;
+  else if(m&&Math.abs(+m[2])<100){ // "KC -3.5"; MLB/NHL put the moneyline here ("NYY -155"), which isn't a spread
+    const t=(teams||[]).find(x=>x.abbr.toUpperCase()===m[1].toUpperCase());
+    if(t){fav=t.home?'home':'away';line=Math.abs(+m[2]);}
+  }
+  if(line===null&&typeof o.spread==='number'&&Number.isFinite(o.spread)){
+    line=Math.abs(o.spread);
+    fav=o.homeTeamOdds?.favorite?'home':o.awayTeamOdds?.favorite?'away':o.spread<0?'home':o.spread>0?'away':null;
+  }
+  if(line===0)fav=null;
+  const out={fav,line,total,ml:money.away||money.home?money:null};
+  return out.line===null&&out.total===null&&!out.ml?null:out;
 }
 async function scores(league,date) {
   const key=league+date, old=cache.get(key);
@@ -67,8 +97,8 @@ async function handle(req,res){
     try{res.end(JSON.stringify(await scores(league,date)));}catch{res.writeHead(502);res.end(JSON.stringify({error:'Unable to reach the score feed. Retrying automatically.'}));}return;
   }
   if(await handleWall(req,res,url,PORT))return;
-  const files={'/remote':['remote.html','text/html'],'/remote.js':['remote.js','text/javascript'],'/calm':['calm.html','text/html'],'/calm.js':['calm.js','text/javascript'],'/sidebar':['sidebar.html','text/html'],'/sidebar.js':['sidebar.js','text/javascript'],'/wall.css':['wall.css','text/css'],'/watch.js':['watch.js','text/javascript'],'/feed.js':['feed.js','text/javascript'],'/backdrop':['backdrop.html','text/html'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml']};
+  const files={'/remote':['remote.html','text/html'],'/remote.js':['remote.js','text/javascript'],'/calm':['calm.html','text/html'],'/calm.js':['calm.js','text/javascript'],'/sidebar':['sidebar.html','text/html'],'/sidebar.js':['sidebar.js','text/javascript'],'/wall.css':['wall.css','text/css'],'/watch.js':['watch.js','text/javascript'],'/feed.js':['feed.js','text/javascript'],'/backdrop':['backdrop.html','text/html'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/details.js':['details.js','text/javascript'],'/style.css':['style.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml'],'/fonts/roboto-condensed-700.woff2':['fonts/roboto-condensed-700.woff2','font/woff2'],'/fonts/roboto-condensed-500.woff2':['fonts/roboto-condensed-500.woff2','font/woff2']};
   if(!Object.hasOwn(files,url.pathname)){res.writeHead(404);return res.end('Not found');}
-  try{const [file,type]=files[url.pathname];res.setHeader('Content-Type',type);res.end(await readFile(new URL(`./public/${file}`,import.meta.url)));}catch{res.writeHead(500);res.end('Unable to load page');}
+  try{const [file,type]=files[url.pathname];res.setHeader('Content-Type',type);if(type==='font/woff2')res.setHeader('Cache-Control','max-age=604800');res.end(await readFile(new URL(`./public/${file}`,import.meta.url)));}catch{res.writeHead(500);res.end('Unable to load page');}
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)){process.on('unhandledRejection',e=>console.error(new Date().toISOString(),'unhandled',e?.stack||e));await initWall({port:PORT});createServer().listen(PORT,process.env.HOST||'0.0.0.0',()=>console.log(`Sportsboard ready: http://localhost:${PORT}  ·  TV Wall remote: http://localhost:${PORT}/remote`));}
