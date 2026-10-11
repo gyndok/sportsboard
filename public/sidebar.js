@@ -11,10 +11,26 @@ function tick() {
 }
 tick(); setInterval(tick, 1000);
 
-const game = e => `<div class="g ${e.state}">
-  <div class="meta"><span>${isFav(e) ? '<span class="fav">★</span> ' : ''}${esc(e.league)}</span><span>${esc(e.state === 'pre' ? new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : e.status)}</span></div>
-  ${e.teams.map(t => `<div class="row"><span>${t.rank ? `<small>${t.rank}</small> ` : ''}${esc(t.abbr)}</span><b>${e.state === 'pre' ? '' : esc(t.score)}</b></div>`).join('')}
+// Same conventions as the board: games alternate green and white, a running clock reads
+// "1ST 4:12", and an upcoming game shows its line (spread on the favorite, total on the dog).
+const liveText = st => { const m = String(st).match(/^(\d{1,2}:\d{2})\s*-\s*(.+)$/); return m ? `${m[2]} ${m[1]}` : st; };
+const half = x => { const a = Math.abs(x), w = Math.floor(a + 1e-9), f = a - w; const fr = Math.abs(f - 0.5) < 1e-6 ? '½' : f < 1e-6 ? '' : String(Math.round(f * 100) / 100).slice(1); return (w === 0 && fr ? '' : String(w)) + fr; };
+function lines(e) {
+  const rows = ['', ''], o = e.odds;
+  if (!o) return rows;
+  const fav = o.fav === 'away' ? 0 : 1;
+  if (o.line != null) rows[fav] = o.line === 0 ? 'PK' : '-' + half(o.line);
+  if (o.total != null) rows[o.line != null ? 1 - fav : 1] = half(o.total);
+  return rows;
+}
+const game = (e, i) => {
+  const ln = lines(e);
+  const status = e.state === 'pre' ? new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : e.state === 'in' ? liveText(e.status) : e.status;
+  return `<div class="g s${i % 2} ${esc(e.state)}">
+  <div class="meta"><span>${isFav(e) ? '<span class="fav">★</span> ' : ''}${esc(e.league)}</span><span>${esc(status)}</span></div>
+  ${e.teams.map((t, k) => `<div class="row"><span>${t.rank ? `<small>${t.rank}</small>` : ''}${esc(t.short || t.abbr)}</span><b>${e.state === 'pre' ? esc(ln[k]) : esc(t.score)}</b></div>`).join('')}
 </div>`;
+};
 
 async function refresh() {
   const feed = await ScoreFeed.load();
@@ -23,8 +39,8 @@ async function refresh() {
   const live = all.filter(e => e.state === 'in').sort(byFav);
   const next = all.filter(e => e.state === 'pre').sort(byFav).slice(0, 12);
   const done = all.filter(e => e.state === 'post').sort((a, b) => isFav(b) - isFav(a) || Date.parse(b.date) - Date.parse(a.date)).slice(0, 10);
-  const block = (title, list) => list.length ? `<h3>${title}</h3>${list.map(game).join('')}` : '';
-  $('#track').innerHTML = (block(`Live · ${live.length}`, live) + block('Up next', next) + block('Final', done)) || `<p class="empty">${esc(ScoreFeed.emptyText(feed, 'No games today.'))}</p>`;
+  const block = (title, list) => list.length ? `<h3>${title}</h3>${list.map((e, i) => game(e, i)).join('')}` : '';
+  $('#track').innerHTML = (block(`In progress · ${live.length}`, live) + block('Up next', next) + block('Final', done)) || `<p class="empty">${esc(ScoreFeed.emptyText(feed, 'No games today.'))}</p>`;
   $('#foot').textContent = ScoreFeed.note(feed);
   $('#foot').classList.toggle('warn-foot', !feed.complete);
 }

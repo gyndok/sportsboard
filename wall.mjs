@@ -367,7 +367,8 @@ const parkPointer = area => osa(`ObjC.import('CoreGraphics');$.CGWarpMouseCursor
 let cleanApplied = null;
 
 // ---------- applying state to the screen ----------
-const resolveUrl = u => u.startsWith('local:') ? base + u.slice(6) : u;
+// The scoreboard on the TV runs in TV mode: no controls, sized to fill its window.
+const resolveUrl = u => u.startsWith('local:') ? base + (u === 'local:/' ? '/?tv=1' : u.slice(6)) : u;
 const serviceUrl = s => s.link || config.services.find(x => x.id === s.service)?.url || 'about:blank';
 const visibleSlots = () => state.slots.slice(0, LAYOUTS[state.layout]?.slots || 1);
 
@@ -380,7 +381,7 @@ function desiredWindows(area) {
     if (plan.scores) want.push({key: 'sidebar', url: `${base}/sidebar`, rect: plan.scores});
     visibleSlots().forEach((s, i) => want.push({key: `slot:${s.uid}`, slot: s, url: resolveUrl(serviceUrl(s)), rect: state.solo === s.uid ? plan.canvas : plan.tiles[i]}));
   } else if (state.mode === 'sportsboard') {
-    want.push({key: 'main', url: `${base}/`, rect: area});
+    want.push({key: 'main', url: `${base}/?tv=1`, rect: area});
   } else if (state.mode === 'calm') {
     want.push({key: 'calm', url: `${base}/calm`, rect: area});
   }
