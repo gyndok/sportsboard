@@ -47,6 +47,13 @@ function render() {
   $('#swap-wrap').hidden = !mainLayout;
   if (mainLayout) $('#swap-bar').innerHTML = showing.slice(1).map((slot, i) => slot.service === 'sportsboard' ? '' :
     `<button data-promote="${slot.uid}"><b>⇱ ${i + 2}</b><small>${esc(what(slot))}</small></button>`).join('');
+  // Playback controls follow the screen you're listening to.
+  const heard = showing.findIndex(slot => slot.uid === s.audio && slot.service !== 'sportsboard');
+  $('#pb-wrap').hidden = s.mode !== 'grid';
+  $('#pb-target').textContent = heard >= 0 ? `Screen ${heard + 1} · ${what(showing[heard])}` : '';
+  document.querySelectorAll('#pb button').forEach(b => { b.disabled = heard < 0; });
+  if (heard < 0) $('#pb-status').textContent = 'Pick a screen with sound (🔊) to control it.';
+  else if ($('#pb-status').textContent.startsWith('Pick a screen')) $('#pb-status').textContent = '';
   $('#sound-hint').hidden = !!wall.soundHelper || s.mode !== 'grid';
   $('#sound-hint').textContent = 'Sound switching is in basic mode. Install the Sportsboard Sound helper in Chrome on the Mini so only the chosen screen ever plays (see README).';
   $('#clean').checked = s.clean !== false;
@@ -103,6 +110,26 @@ $('#swap-bar').addEventListener('click', e => {
 });
 $('#sound-bar').addEventListener('click', e => { const b = e.target.closest('[data-audio]'); if (b) patch({audio: b.dataset.audio}, 'Switching sound…'); });
 $('#sidebar').addEventListener('change', e => patch({sidebar: e.target.checked}));
+// ---------- playback (the screen with sound) ----------
+const clockText = n => { n = Math.max(0, Math.round(n || 0)); const h = Math.floor(n / 3600), m = Math.floor(n / 60) % 60, sec = String(n % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`; };
+function playbackText(d, action) {
+  if (d.error) return d.error;
+  if (action === 'cc') return {on: 'Captions on', off: 'Captions off', switched: 'Captions switched'}[d.cc] || 'Captions switched';
+  const where = d.live ? (d.behind <= 12 ? 'At live' : `${clockText(d.behind)} behind live`) : `${clockText(d.position)}${d.duration ? ' / ' + clockText(d.duration) : ''}`;
+  return `${d.paused ? 'Paused' : 'Playing'} · ${where}`;
+}
+let pbSeq = 0;
+async function playback(action) {
+  const seq = ++pbSeq;
+  try {
+    const r = await fetch('/api/wall/playback', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action})});
+    const d = await r.json().catch(() => ({error: 'The Mini didn’t respond.'}));
+    if (seq === pbSeq) $('#pb-status').textContent = playbackText(r.ok ? d : {error: d.error || 'That didn’t work.'}, action);
+    // Seeks settle a moment later; show where the screen ended up (captions keep their message).
+    if (r.ok && action !== 'cc' && action !== 'status') setTimeout(() => { if (seq === pbSeq) playback('status'); }, 1200);
+  } catch { if (seq === pbSeq) $('#pb-status').textContent = 'The Mini didn’t respond.'; }
+}
+$('#pb').addEventListener('click', e => { const b = e.target.closest('[data-pb]'); if (b && !b.disabled) playback(b.dataset.pb); });
 $('#slots').addEventListener('click', e => {
   const b = e.target.closest('button[data-act]'); if (!b) return;
   const uid = b.closest('li').dataset.uid, s = wall.state, slots = slotsCopy();

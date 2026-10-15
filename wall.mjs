@@ -339,6 +339,41 @@ if(!t){t=document.createElement('meta');t.name='theme-color';t.dataset.wall='1';
 t.content='#000000';
 ${YT_JS}
 return 'ok';})()`;
+// Playback controls from the remote, run inside one stream's page. They work on the
+// page's own <video>, so seeking, pausing and jumping to live behave the same on every
+// service; YouTube's own player API is used when it's there. Captions: the CC button on
+// YouTube, the captions button (or its "c" shortcut) on YouTube TV, and the video's own
+// caption tracks elsewhere. A service whose captions live in a menu says so instead of
+// opening a menu nobody can close from the couch. Returns a small status report.
+export const PLAY_ACTIONS = ['back30', 'back10', 'toggle', 'fwd10', 'fwd30', 'live', 'cc', 'status'];
+export const PLAY_JS = `(()=>{const act=__ACT__;
+const host=location.hostname,tvyt=host==='tv.youtube.com',yt=/(^|\\.)youtube\\.com$/.test(host)&&!tvyt?document.querySelector('#movie_player'):null;
+const area=x=>{const r=x.getBoundingClientRect();return r.width*r.height};
+const v=[...document.querySelectorAll('video')].filter(x=>x.readyState>0||x.currentSrc).sort((a,b)=>area(b)-area(a))[0];
+if(!v)return JSON.stringify({ok:false,error:'No video is playing on that screen.'});
+const range=()=>{const s=v.seekable;return s&&s.length?[s.start(0),s.end(s.length-1)]:[0,isFinite(v.duration)?v.duration:v.currentTime]};
+const isLive=()=>v.duration===Infinity||!!(yt&&yt.getVideoData&&(yt.getVideoData()||{}).isLive);
+const play=()=>{if(yt&&yt.playVideo)yt.playVideo();else{const q=v.play();if(q&&q.catch)q.catch(()=>{})}};
+const seek=d=>{if(yt&&yt.seekTo&&yt.getCurrentTime){yt.seekTo(Math.max(0,yt.getCurrentTime()+d),true);return}const r=range();v.currentTime=Math.max(r[0],Math.min(r[1]-1,v.currentTime+d))};
+const label=e=>(e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'');
+const captions=()=>{
+ if(yt){const b=document.querySelector('.ytp-subtitles-button');if(!b||b.getAttribute('aria-disabled')==='true')return 'none';b.click();return b.getAttribute('aria-pressed')==='true'?'on':'off'}
+ if(tvyt){const b=[...document.querySelectorAll('button,[role=button]')].find(e=>/caption|subtitle/i.test(label(e))&&!/setting|audio|language|menu/i.test(label(e)));
+  if(b){b.click();const p=b.getAttribute('aria-pressed');return p==='true'?'on':p==='false'?'off':'switched'}
+  const t=document.activeElement||document.body,k={key:'c',code:'KeyC',keyCode:67,which:67,bubbles:true,cancelable:true};
+  t.dispatchEvent(new KeyboardEvent('keydown',k));t.dispatchEvent(new KeyboardEvent('keyup',k));return 'switched'}
+ const tr=[...v.textTracks].filter(t=>t.kind==='captions'||t.kind==='subtitles');
+ if(!tr.length)return 'none';
+ const on=tr.some(t=>t.mode==='showing');tr.forEach(t=>{t.mode='disabled'});if(!on)tr[0].mode='showing';return on?'off':'on'};
+const out={ok:true};
+if(act==='back30')seek(-30);else if(act==='back10')seek(-10);else if(act==='fwd10')seek(10);else if(act==='fwd30')seek(30);
+else if(act==='toggle'){if(v.paused)play();else if(yt&&yt.pauseVideo)yt.pauseVideo();else v.pause()}
+else if(act==='live'){const badge=yt&&document.querySelector('.ytp-live-badge');if(badge&&isLive())badge.click();else{const r=range();v.currentTime=Math.max(r[0],r[1]-2)}if(v.paused)play()}
+else if(act==='cc'){out.cc=captions();if(out.cc==='none'){out.ok=false;out.error="This service's captions can't be switched from the remote. Use its own CC menu."}}
+const r=range();out.live=isLive();out.paused=v.paused;out.behind=out.live?Math.max(0,Math.round(r[1]-v.currentTime)):null;
+out.position=Math.round(v.currentTime);out.duration=isFinite(v.duration)?Math.round(v.duration):null;
+return JSON.stringify(out)})()`;
+
 async function setMutes(list) {
   if (!list.length) return [];
   return osa(`const errs=[];for(const it of arg.list){try{chrome.windows.byId(it.id).activeTab.execute({javascript:arg.js.replace('__MUTED__',String(it.muted)).replace('__CLEAN__',String(arg.clean))});}catch(e){errs.push(String(e))}}return JSON.stringify(errs);`, {list, js: PAGE_JS, clean: state.clean && state.mode !== 'off'});
@@ -679,6 +714,24 @@ export async function handleWall(req, res, url, port) {
       }
       await saveConfig();
       send(res, 200, {channels: config.channels});
+    } else if (p === '/api/wall/playback' && req.method === 'POST') {
+      // Rewind, fast-forward, pause, live and captions for one screen: the one you're
+      // listening to unless the remote names another.
+      const b = await readBody(req);
+      if (!PLAY_ACTIONS.includes(b.action)) return send(res, 400, {error: 'Unknown playback control.'}), true;
+      if (b.screen != null && typeof b.screen !== 'string') return send(res, 400, {error: 'Bad screen.'}), true;
+      if (state.mode !== 'grid') return send(res, 409, {error: 'Playback controls work in Game day.'}), true;
+      const shown = visibleSlots(), uid = b.screen ?? state.audio, slot = shown.find(s => s.uid === uid);
+      if (!slot || slot.service === 'sportsboard') return send(res, 409, {error: 'Pick a screen with sound (🔊) to control it.'}), true;
+      const id = state.windows[`slot:${uid}`];
+      if (!id || process.platform !== 'darwin' || TESTING) return send(res, 409, {error: 'That screen isn\'t open on the TV right now.'}), true;
+      let d;
+      try { d = await osa(`return chrome.windows.byId(arg.id).activeTab.execute({javascript: arg.js});`, {id, js: PLAY_JS.replace('__ACT__', JSON.stringify(b.action))}); }
+      catch (e) {
+        return send(res, 502, {error: /JavaScript|Apple ?Events|not allowed/i.test(e.message) ? 'Turn on Chrome › View › Developer › Allow JavaScript from Apple Events on the Mini.' : 'That screen didn\'t respond.'}), true;
+      }
+      if (!isObj(d)) return send(res, 502, {error: 'That screen didn\'t respond.'}), true;
+      send(res, d.ok ? 200 : 422, {...d, screen: shown.indexOf(slot) + 1});
     } else if (p === '/api/wall/watch' && req.method === 'POST') {
       const b = await readBody(req);
       const slotIndex = Number(b.slot);
