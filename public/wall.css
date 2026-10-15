@@ -90,6 +90,11 @@ body.sidebar{background:#000;font-family:'Board','Roboto Condensed','Arial Narro
 .sound-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:6px}
 .sound-bar button{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 6px;min-height:64px}
 .sound-bar button b{font-size:18px}.sound-bar button small{font-size:10px;text-transform:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.pb button{min-height:58px;font-size:18px;padding:8px 4px;color:var(--white)}
+.pb .wide{grid-column:span 3;color:var(--red)}.pb .wide2{grid-column:span 2}
+.pb button:disabled{opacity:.4;cursor:default}
+#pb-target{color:var(--teal);font-size:11px;letter-spacing:0;margin-left:6px}
 .sound-bar button[aria-pressed=true]{background:#123a31;border-color:var(--teal);color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
 /* scores panel laid out wide (bottom band) instead of tall */
 @media (min-aspect-ratio: 3/2){

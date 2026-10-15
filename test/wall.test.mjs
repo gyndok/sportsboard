@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from '../server.mjs';
-import {PAGE_JS, YT_JS} from '../wall.mjs';
+import {PAGE_JS, YT_JS, PLAY_JS, PLAY_ACTIONS} from '../wall.mjs';
 import os from 'node:os';
 import {mkdtemp, mkdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
@@ -251,3 +251,20 @@ test('the page script compiles and only reshapes regular YouTube pages', () => {
   assert.ok(YT_JS.includes("location.hostname!=='tv.youtube.com'"), 'YouTube TV is left alone');
   for (const h of ['notyoutube.com', 'youtube.com.evil.net', 'peacocktv.com']) assert.ok(!re.test(h), h);
 });
+
+test('playback controls: valid actions only, and only for a Game day screen', () => withServer(async base => {
+  const post = (path, body) => fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  for (const a of PLAY_ACTIONS) assert.doesNotThrow(() => new Function('return ' + PLAY_JS.replace('__ACT__', JSON.stringify(a))), a);
+  assert.equal((await fetch(base + '/api/wall/playback')).status, 405);
+  assert.equal((await post('/api/wall/playback', {action: 'explode'})).status, 400);
+  assert.equal((await post('/api/wall/playback', {action: 'toString'})).status, 400);
+  assert.equal((await post('/api/wall/playback', {action: 'toggle', screen: 5})).status, 400);
+  const before = (await (await fetch(base + '/api/wall')).json()).state.mode;
+  await post('/api/wall', {mode: 'calm'});
+  const r = await post('/api/wall/playback', {action: 'toggle'});
+  assert.equal(r.status, 409); assert.match((await r.json()).error, /Game day/);
+  await post('/api/wall', {mode: 'grid'});
+  assert.equal((await post('/api/wall/playback', {action: 'live', screen: 'nosuchscreen'})).status, 409, 'unknown screen');
+  assert.equal((await post('/api/wall/playback', {action: 'live'})).status, 409, 'no window on the TV in tests');
+  await post('/api/wall', {mode: before});
+}));
