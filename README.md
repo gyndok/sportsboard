@@ -1,5 +1,7 @@
 # Sportsboard
 
+**New here? The [User's Manual](USER_MANUAL.md) walks through installing it, setting up the TV and using the phone remote.**
+
 A local sportsbook-style scoreboard for NFL, MLB, NCAA Division I football (FBS/FCS), NHL, and NBA. Requires Node.js 20 or newer and an internet connection. No packages or API keys required.
 
 The board is laid out like a Las Vegas sportsbook board: a black board with ruled columns, bold condensed caps (Roboto Condensed, bundled in `public/fonts` under the SIL Open Font License), and games alternating LED green and white. Each league gets a column, continuing into more columns with its header repeated, and each game is two rows: **ID · TEAM · SCR · PS/TOT · ML · TV**. Status lines sit above the games: start times for upcoming games, the running clock in amber for live games ("1ST 4:12"), and FINAL. PS/TOT shows the spread on the favorite's row and the total on the underdog's (PK for a pick'em), and ML shows each side's moneyline. Lines come from the first odds provider in ESPN's feed (when it has one) and are blank otherwise. ID numbers are house rotation numbers (away odd, home even, in start-time order), not a sportsbook's.
