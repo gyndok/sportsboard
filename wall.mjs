@@ -531,12 +531,13 @@ async function oddsTick() {
       if (found) screenGame.set(x.uid, {league: found.league, id: found.event.id, channel: r?.title || ''});
       else screenGame.delete(x.uid);
       const uid = x.uid;
-      if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
+      if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, hand: null, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
       const game = await liveGame(found.league, found.event).catch(() => null);
       const delay = config.odds.delay + (r?.behind > 3 ? r.behind : 0);
       const data = game && chartData(game, delay);
       if (data) oddsDraw.set(x.id, data); else oddsDraw.delete(x.id);
-      status.push({screen, uid, title: r?.title || '', via, game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
+      const hintNow = slotGame.get(x.uid);
+      status.push({screen, uid, hand: hintNow?.hand ? `${hintNow.league}:${hintNow.id}` : null, title: r?.title || '', via, game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
     }));
     for (const id of [...oddsDraw.keys()]) if (!list.some(x => x.id === id)) oddsDraw.delete(id);
     for (const id of [...oddsDrawn]) if (!list.some(x => x.id === id)) oddsDrawn.delete(id);
