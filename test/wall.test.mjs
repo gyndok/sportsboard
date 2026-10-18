@@ -298,3 +298,43 @@ test('odds chart settings: validated, clamped and saved', () => withServer(async
   assert.equal((await (await fetch(`${base}/api/wall`)).json()).odds.on, false, 'kept');
   await post({on: true});
 }));
+
+test('a stream finds its game from page text, the picked game, or its network', async () => {
+  const {whichGame} = await import('../wall.mjs');
+  const ev = (id, away, home, broadcast, state = 'in') => ({id, state, broadcast, teams: [{name: away[0], short: away[1], abbr: away[2]}, {name: home[0], short: home[1], abbr: home[2]}]});
+  const events = {NFL: [
+    ev('1', ['New York Jets', 'Jets', 'NYJ'], ['New England Patriots', 'Patriots', 'NE'], 'CBS'),
+    ev('2', ['Chicago Bears', 'Bears', 'CHI'], ['Atlanta Falcons', 'Falcons', 'ATL'], 'FOX'),
+    ev('3', ['Baltimore Ravens', 'Ravens', 'BAL'], ['Cleveland Browns', 'Browns', 'CLE'], 'FOX'),
+    ev('4', ['Dallas Cowboys', 'Cowboys', 'DAL'], ['Green Bay Packers', 'Packers', 'GB'], 'NBC', 'pre')
+  ]};
+  let r = whichGame({title: 'NFL ST - CBS', cands: ['NFL ST - CBS', 'New York Jets at New England Patriots']}, null, events);
+  assert.equal(r.found.event.id, '1'); assert.equal(r.via, 'page');
+  r = whichGame({title: 'FOX 26', cands: []}, {league: 'NFL', id: '3'}, events);
+  assert.equal(r.found.event.id, '3'); assert.equal(r.via, 'picked');
+  r = whichGame({title: 'NFL ST - CBS', cands: []}, null, events);
+  assert.equal(r.found.event.id, '1', 'the only live CBS game'); assert.equal(r.via, 'network');
+  assert.equal(whichGame({title: 'FOX', cands: []}, null, events).found, null, 'two FOX games: no guess');
+  assert.equal(whichGame({title: 'NBC', cands: []}, null, events).found, null, 'only live games count');
+  assert.equal(whichGame({title: 'NFL RedZone', cands: []}, null, events).found, null);
+  assert.equal(whichGame(null, null, events).found, null);
+});
+
+test('a screen can be tied to a game by hand from the remote', () => withServer(async base => {
+  const post = body => fetch(`${base}/api/wall/odds`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const uid = (await (await fetch(`${base}/api/wall`)).json()).state.slots[0].uid;
+  assert.equal((await post({link: {screen: uid, game: {league: 'NFL', id: '401'}}})).status, 200);
+  assert.equal((await post({link: {screen: uid, game: null}})).status, 200);
+  assert.equal((await post({link: {screen: 'nope', game: null}})).status, 400);
+  assert.equal((await post({link: {screen: uid, game: {league: 'XFL', id: '1'}}})).status, 400);
+  assert.equal((await post({link: {screen: uid, game: {league: 'NFL', id: 'x; drop'}}})).status, 400);
+}));
+
+test('a game tied by hand beats what the page says', async () => {
+  const {whichGame} = await import('../wall.mjs');
+  const t = (n, s, a) => ({name: n, short: s, abbr: a});
+  const events = {NFL: [{id: '1', state: 'in', teams: [t('New York Jets', 'Jets', 'NYJ'), t('New England Patriots', 'Patriots', 'NE')]}, {id: '2', state: 'in', teams: [t('Chicago Bears', 'Bears', 'CHI'), t('Atlanta Falcons', 'Falcons', 'ATL')]}]};
+  const report = {title: 'x', cands: ['Bears at Falcons']};
+  assert.equal(whichGame(report, {league: 'NFL', id: '1'}, events).found.event.id, '2', 'a 📺 pick yields to the page');
+  assert.equal(whichGame(report, {league: 'NFL', id: '1', hand: true}, events).found.event.id, '1');
+});

@@ -104,11 +104,16 @@ function renderOdds() {
   $('#odds-delay-val').textContent = `${o.delay}s`;
   document.querySelectorAll('#odds-delay button').forEach(b => { b.disabled = !o.on; });
   const pc = p => p < 0.005 ? '<1' : p > 0.995 ? '>99' : Math.round(p * 100);
+  const pick = x => `<select data-link="${esc(x.uid)}" aria-label="Game on screen ${x.screen}"><option value="">${x.via === 'picked' ? 'Unlink' : 'Link a game…'}</option>${liveGames.map(e => `<option value="${esc(e.league)}:${esc(e.id)}">${esc(e.teams.map(t => t.abbr).join(' @ '))}${e.state === 'in' ? '' : ' · ' + esc(new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}))}</option>`).join('')}</select>`;
   $('#odds-screens').innerHTML = o.on ? (o.screens || []).map(x => {
-    if (!x.game) return `<p>Screen ${x.screen} · <small>${x.title ? `no game found in “${esc(x.title)}”` : 'no game title from this stream yet — play it from the Games list to link it'}</small></p>`;
+    if (!x.game) {
+      const seen = (x.seen || []).filter(t => t !== x.title);
+      return `<p>Screen ${x.screen} · <small>${x.title ? `no game found in “${esc(x.title)}”` : 'no title from this stream'}${seen.length ? ` (also saw: ${seen.map(t => `“${esc(t)}”`).join(', ')})` : ''}</small> ${pick(x)}</p>`;
+    }
     const [a, h] = x.game.split(' @ ');
     const odds = x.chance ? `${esc(a)} ${pc(x.chance.away)}% · ${esc(h)} ${pc(x.chance.home)}%` : x.market ? 'waiting for prices' : 'no Polymarket market for this game';
-    return `<p>Screen ${x.screen} · ${esc(x.game)} <small>${odds}${x.behind > 3 ? ` · ${x.behind}s behind live` : ''}</small></p>`;
+    const via = {picked: ' · picked from Games', network: ` · only game live on ${esc(x.title)}`}[x.via] || '';
+    return `<p>Screen ${x.screen} · ${esc(x.game)} <small>${odds}${x.behind > 3 ? ` · ${x.behind}s behind live` : ''}${via}</small>${x.via === 'picked' || x.via === 'network' ? ' ' + pick(x) : ''}</p>`;
   }).join('') : '';
 }
 async function setOdds(body) {
@@ -119,6 +124,14 @@ async function setOdds(body) {
   } catch (e) { $('#status').textContent = e.message || 'Failed'; }
 }
 $('#odds-on').addEventListener('change', e => setOdds({on: e.target.checked}));
+// Tie a screen to a game by hand when its stream doesn't say which game it is.
+$('#odds-screens').addEventListener('change', e => {
+  const sel = e.target.closest('[data-link]'); if (!sel) return;
+  const [league, id] = sel.value.split(':');
+  setOdds({link: {screen: sel.dataset.link, game: sel.value ? {league, id} : null}});
+  $('#status').textContent = sel.value ? 'Linked · the chart appears within a few seconds' : 'Unlinked';
+  setTimeout(load, 6000);
+});
 $('#odds-delay').addEventListener('click', e => { const b = e.target.closest('[data-nudge]'); if (b && !b.disabled) setOdds({nudge: Number(b.dataset.nudge)}); });
 function incr(a) { return a.split('/').map(Number).map(n => n + 1).join('/'); }
 
@@ -220,8 +233,10 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('wall-changed', () => setTimeout(load, 300));
 
+let liveGames = [];
 async function loadGames() {
   const feed = await ScoreFeed.load();
+  liveGames = feed.events.filter(e => e.state !== 'post').sort((a, b) => (a.state === 'in' ? 0 : 1) - (b.state === 'in' ? 0 : 1) || Date.parse(a.date) - Date.parse(b.date));
   const all = feed.events
     .filter(e => e.state !== 'post').sort((a, b) => (a.state === 'in' ? 0 : 1) - (b.state === 'in' ? 0 : 1) || Date.parse(a.date) - Date.parse(b.date));
   $('#games').innerHTML = all.length ? all.map(e => `<div class="game-row"><span class="gl">${e.state === 'in' ? '<b>LIVE</b>' : new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})} · ${esc(e.league)}</span>
