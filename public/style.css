@@ -68,6 +68,11 @@ footer{display:flex;justify-content:space-between;gap:16px;padding:10px 20px 18p
 .game:hover .star,.star:focus-visible{width:auto;margin-right:.25em}
 .star:hover{color:var(--gold)}
 @media (hover:none){.star{width:auto;margin-right:.25em;opacity:.55}.star[aria-pressed=true]{opacity:1}}
+.board.mkt{--grid:2.3em minmax(0,1fr) 2.1em 2.9em 3em 4em 3.3em}
+.win{white-space:nowrap}
+.win .spark{width:1.75em;height:1em;margin-right:.2em;vertical-align:-.1em;overflow:visible}
+.win .spark polyline{fill:none;stroke:currentColor;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;opacity:.85}
+.win i{font-style:normal;font-size:.62em;margin-right:.15em;vertical-align:.15em;color:var(--amber);text-shadow:var(--glow-a)}
 .note{padding:.6em 0;text-align:center;font-size:.9em;line-height:1.3;color:var(--dim)}
 .note.warn{color:var(--red);padding:.3em 0}
 .board.measure{position:absolute;left:-9999px;top:0;visibility:hidden;width:30em;min-width:0;border:0}
@@ -88,7 +93,7 @@ body.tv{height:100vh;overflow:hidden;display:flex;flex-direction:column}
 .tv .game:hover{background:none}
 
 @media(max-width:850px){.top{padding:10px 14px;gap:12px}.clock span{display:none}h1{font-size:19px}main{padding:10px 14px 0}#summary{margin-left:0}footer{padding:10px 14px 18px;flex-direction:column}}
-@media(max-width:520px){:root{--grid:2.1em minmax(0,1fr) 2em 2.7em 2.9em}.row .tv,.cols span:last-child{display:none}.top{flex-wrap:wrap}button,input{font-size:13px;padding:7px 8px}}
+@media(max-width:520px){:root{--grid:2.1em minmax(0,1fr) 2em 2.7em 2.9em}.board.mkt{--grid:2.1em minmax(0,1fr) 2em 2.7em 2.9em 2.4em}.win .spark{display:none}.row .tv,.cols span:last-child{display:none}.top{flex-wrap:wrap}button,input{font-size:13px;padding:7px 8px}}
 
 /* ---------- game details dialog ---------- */
 #game-dialog{width:min(1000px,94vw);max-height:90vh;padding:0 24px 24px;color:var(--white);background:#050505;border:2px solid var(--rule);box-shadow:0 0 40px #000b;text-transform:none;font-weight:500}

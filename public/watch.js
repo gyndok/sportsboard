@@ -55,6 +55,7 @@
     if (chip) {
       e.preventDefault(); e.stopPropagation();
       const payload = chip.dataset.channel ? {channel: chip.dataset.channel} : {broadcast: chip.dataset.watch};
+      if (!chip.dataset.channel && chip.dataset.gameId) payload.game = {league: chip.dataset.gameLeague, id: chip.dataset.gameId}; // lets the odds chart know the game
       open(chip, payload, chip.dataset.title || chip.dataset.watch || chip.textContent.trim());
     } else if (menu && !e.target.closest('.watch-menu')) close();
   }, true);

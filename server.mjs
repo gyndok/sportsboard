@@ -2,6 +2,7 @@ import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {initWall, handleWall} from './wall.mjs';
+import {marketsFor, POLY_LEAGUES} from './poly.mjs';
 const PORT=Number(process.env.PORT || 8787);
 export const leagues = {NFL:'football/nfl',MLB:'baseball/mlb',NCAAF:'football/college-football',NHL:'hockey/nhl',NBA:'basketball/nba'};
 const cache = new Map();
@@ -77,6 +78,8 @@ async function details(league,id){
   }catch(error){if(old)return {...old.data,stale:true};throw error;}})();
   detailPending.set(key,task);try{return await task;}finally{detailPending.delete(key);}
 }
+// Today's games in every league (for the TV wall's odds chart); a league that fails is left out.
+export async function todaysEvents(){const d=new Date(),day=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;const out={};await Promise.all(Object.keys(leagues).map(async l=>{try{out[l]=(await scores(l,day)).events;}catch{}}));return out;}
 // Real calendar dates only (YYYYMMDD), within a sane window.
 export function validYmd(d){if(!/^\d{8}$/.test(d||''))return false;const y=+d.slice(0,4),m=+d.slice(4,6),day=+d.slice(6);const t=new Date(Date.UTC(y,m-1,day));return y>=2000&&y<=2100&&t.getUTCMonth()===m-1&&t.getUTCDate()===day;}
 // One boundary for every request: nothing a client sends can take the server down.
@@ -90,6 +93,16 @@ async function handle(req,res){
     if(!Object.hasOwn(leagues,league)||!/^\d{1,15}$/.test(id||'')){res.writeHead(400);return res.end(JSON.stringify({error:'Invalid game'}));}
     try{res.end(JSON.stringify(await details(league,id)));}catch{res.writeHead(502);res.end(JSON.stringify({error:'Game details are temporarily unavailable. Please retry.'}));}return;
   }
+  if(url.pathname==='/api/market'){
+    // Polymarket win chances for one league's games on one day. Kept apart from /api/scores
+    // so the board's scores never wait on (or fail with) the market feed.
+    res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
+    const league=url.searchParams.get('league'),date=url.searchParams.get('date');
+    if(!Object.hasOwn(leagues,league) || !validYmd(date)){res.writeHead(400);return res.end(JSON.stringify({error:'Invalid league or date'}));}
+    if(!Object.hasOwn(POLY_LEAGUES,league))return res.end(JSON.stringify({league,markets:{}}));
+    try{const s=await scores(league,date);res.end(JSON.stringify({league,markets:await marketsFor(league,s.events),updated:new Date().toISOString()}));}
+    catch{res.writeHead(502);res.end(JSON.stringify({error:'Market prices are temporarily unavailable.'}));}return;
+  }
   if(url.pathname==='/api/scores'){
     res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
     const league=url.searchParams.get('league'),date=url.searchParams.get('date');
@@ -101,4 +114,4 @@ async function handle(req,res){
   if(!Object.hasOwn(files,url.pathname)){res.writeHead(404);return res.end('Not found');}
   try{const [file,type]=files[url.pathname];res.setHeader('Content-Type',type);if(type==='font/woff2')res.setHeader('Cache-Control','max-age=604800');res.end(await readFile(new URL(`./public/${file}`,import.meta.url)));}catch{res.writeHead(500);res.end('Unable to load page');}
 }
-if(process.argv[1]===fileURLToPath(import.meta.url)){process.on('unhandledRejection',e=>console.error(new Date().toISOString(),'unhandled',e?.stack||e));await initWall({port:PORT});createServer().listen(PORT,process.env.HOST||'0.0.0.0',()=>console.log(`Sportsboard ready: http://localhost:${PORT}  ·  TV Wall remote: http://localhost:${PORT}/remote`));}
+if(process.argv[1]===fileURLToPath(import.meta.url)){process.on('unhandledRejection',e=>console.error(new Date().toISOString(),'unhandled',e?.stack||e));await initWall({port:PORT,games:todaysEvents});createServer().listen(PORT,process.env.HOST||'0.0.0.0',()=>console.log(`Sportsboard ready: http://localhost:${PORT}  ·  TV Wall remote: http://localhost:${PORT}/remote`));}

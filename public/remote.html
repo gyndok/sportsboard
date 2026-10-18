@@ -33,6 +33,17 @@
       </div>
       <p class="hint" id="pb-status" role="status"></p>
     </div>
+    <div id="odds-wrap">
+      <h2>Odds on screen <small>Polymarket</small></h2>
+      <label class="switch"><input type="checkbox" id="odds-on"><span>Win-chance chart on each game <small>(top-left corner)</small></span></label>
+      <div class="pb odds-delay" id="odds-delay">
+        <button data-nudge="-5" aria-label="5 seconds less delay">−5</button><button data-nudge="-1" aria-label="1 second less delay">−1</button>
+        <output id="odds-delay-val" aria-live="polite">20s</output>
+        <button data-nudge="1" aria-label="1 second more delay">+1</button><button data-nudge="5" aria-label="5 seconds more delay">+5</button>
+      </div>
+      <div id="odds-screens"></div>
+      <p class="hint">Prices move about 10–20 seconds before the TV shows the play, so the chart runs this far behind. After a big play: if the chart moved first, add delay; if it moved late, take some away. Pausing or rewinding a game adds to it automatically.</p>
+    </div>
     <div id="swap-wrap" hidden><h2>Swap to big</h2><div class="sound-bar swap-bar" id="swap-bar"></div></div>
     <h2>Layout</h2>
     <div class="layouts" id="layouts"></div>
