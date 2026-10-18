@@ -215,7 +215,7 @@ test('restart keeps the wall when one saved value is stale, and never clobbers t
   const good = {channels: [{id: 'fs1', name: 'FS1', aliases: [], url: 'https://tv.youtube.com/watch/example'}]};
   await writeFile(`${cfg}.last-good`, JSON.stringify(good));
   await writeFile(cfg, '{"channels": [ truncated');
-  await writeFile(st, JSON.stringify({mode: 'grid', layout: 'main3', sidebar: true, calm: {pinned: 'yt-deleted-scene', clock: false, names: true},
+  await writeFile(st, JSON.stringify({mode: 'grid', layout: 'main3', sidebar: true, calm: {pinned: 'yt-deleted-scene', clock: false, names: true}, display: {id: 4, name: 'VX2458 Series'},
     slots: [{uid: 'aaa', service: 'youtubetv', link: ''}, {uid: 'bbb', service: 'peacock', link: ''}]}));
   await initWall({port: 0});
   await withServer(async base => {
@@ -226,6 +226,7 @@ test('restart keeps the wall when one saved value is stale, and never clobbers t
     assert.equal(d.state.calm.pinned, null, 'only the stale pin is dropped');
     assert.equal(d.state.calm.clock, false);
     assert.equal(d.state.calm.names, true, 'scene-name setting kept across a restart');
+    assert.deepEqual(d.state.display, {id: 4, name: 'VX2458 Series'}, 'TV screen choice kept across a restart');
     assert.deepEqual(d.state.slots.map(s => s.uid), ['aaa', 'bbb']);
   });
   assert.equal(JSON.parse(await readFile(`${cfg}.last-good`, 'utf8')).channels[0].id, 'fs1', 'backup untouched');
@@ -267,4 +268,17 @@ test('playback controls: valid actions only, and only for a Game day screen', ()
   assert.equal((await post('/api/wall/playback', {action: 'live', screen: 'nosuchscreen'})).status, 409, 'unknown screen');
   assert.equal((await post('/api/wall/playback', {action: 'live'})).status, 409, 'no window on the TV in tests');
   await post('/api/wall', {mode: before});
+}));
+
+test('the TV screen choice is validated, saved and survives a restart', () => withServer(async base => {
+  const post = body => fetch(base + '/api/wall', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const get = async () => (await fetch(base + '/api/wall')).json();
+  assert.deepEqual((await get()).displays, [], 'no displays are listed off the Mac');
+  for (const bad of ['tv', 3, {id: -1, name: 'x'}, {id: 1.5, name: 'x'}, {id: 2}, {id: 2, name: 'x'.repeat(81)}, {id: 2 ** 33, name: 'x'}]) {
+    assert.equal((await post({display: bad})).status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await post({display: {id: 4, name: ' VX2458 Series '}})).status, 200);
+  assert.deepEqual((await get()).state.display, {id: 4, name: 'VX2458 Series'});
+  assert.equal((await post({display: null})).status, 200);
+  assert.equal((await get()).state.display, null);
 }));

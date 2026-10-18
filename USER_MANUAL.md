@@ -136,7 +136,7 @@ Do these once on the Mac that's connected to the TV.
 4. **Dark title bars.** In Chrome, go to **Settings › Appearance › Mode** and choose **Dark**.
 5. **Hide the menu bar.** Go to **System Settings › Control Center › Automatically hide and show the menu bar** and choose **Always**.
 6. **Sign in to your streaming services in Chrome**: YouTube TV, Peacock, Prime, etc. Use a normal Chrome window and sign in once each.
-7. **Make the TV the main display** if the Mac also has its own screen (a MacBook, say). Sportsboard uses the main display, the one with the menu bar. Set it in **System Settings › Displays**.
+7. **More than one screen?** If the Mac has a TV plus a monitor you work on (or a MacBook's own screen), pick the TV under **TV screen** on the remote ([section 5](#5-the-phone-remote)). Until you do, the wall uses the main display, the one with the menu bar.
 8. **Keep the Mac awake.** If the Mac sleeps, many TVs think the input turned off. In **System Settings › Energy** (on a laptop, **Battery › Options**), turn on **Prevent automatic sleeping when the display is off**. In **Lock Screen**, set **Turn display off when inactive** to a long time or **Never**.
 9. **Optional, for Calm:** in **System Settings › Wallpaper**, pick a few **Aerial** landscapes and let them download. Calm plays the ones on your Mac.
 
@@ -158,6 +158,7 @@ At the top of the remote:
 | **Calm** | Shows relaxing scenery. |
 | **Off** | Closes the TV windows and gives you your normal desktop back. |
 | **Clean screen** | Hides the Dock, menu bar and window title bars, and moves the mouse pointer to the edge of the screen. Turning it off, or choosing **Off**, puts your Dock and menu bar back the way they were. |
+| **TV screen** | Only shown when the Mac has more than one screen. Tap the one that should show the wall. When the wall is on a second screen, you can keep working on the main one: Clean screen leaves your Dock, menu bar and mouse alone there, and the wall doesn't pull Chrome in front of what you're doing. |
 
 The **← Board** link opens the scoreboard on your phone. It's handy for checking scores without changing the TV.
 
@@ -317,7 +318,7 @@ Your settings live in `wall-config.json` (channels, scenes, schedule) and `wall-
 | Calm says no Aerials are downloaded | Download some in **System Settings › Wallpaper** (Aerial section). |
 | Scores are missing or say a feed is unavailable | ESPN's feed is down or slow. Sportsboard keeps the last scores and retries every 30 seconds. |
 | The TV goes to "no signal" | The Mac went to sleep. See [section 4](#4-one-time-mac-setup-for-the-tv), step 8. |
-| The games are on the wrong screen | Make the TV the main display in **System Settings › Displays** (the one with the menu bar). |
+| The games are on the wrong screen | Pick the right one under **TV screen** on the remote. If the remote says the screen you picked isn't connected, plug it in (or pick another); meanwhile the wall uses the main screen. |
 | Something else | Look at `log.txt` in the `sportsboard` folder for error messages, then double-click `Restart Sportsboard.command`. |
 
 ---
