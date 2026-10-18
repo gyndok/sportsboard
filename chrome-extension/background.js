@@ -1,9 +1,11 @@
 // Sportsboard Sound: enforce "one screen has sound" on the TV Wall using
-// Chrome's tab mute, which streaming players cannot undo.
+// Chrome's tab mute, which streaming players cannot undo. It also does the
+// remote's Reset zoom (⌘0 on every wall screen).
 // The Sportsboard server says which wall windows exist (by their on-screen
 // bounds) and which one should be heard; this matches them to Chrome windows.
 const BASE = 'http://127.0.0.1:8788';
-let plan = null, version = -1, running = false;
+let plan = null, version = -1, running = false, zoomSeen = null;
+const VERSION = chrome.runtime.getManifest().version;
 const mutedByUs = new Set();
 
 const distance = (win, r) => Math.abs(win.left - r.x) + Math.abs(win.top - r.y) + Math.abs(win.width - r.width) + Math.abs(win.height - r.height);
@@ -23,6 +25,18 @@ async function enforce() {
     for (const win of wins) { const d = distance(win, screen.rect); if (d < bestD) { bestD = d; best = win; } }
     if (best && bestD < 240) role.set(best.id, (role.get(best.id) || false) || screen.audio);
   }
+  // Reset zoom: back to 100% on every wall window. Chrome keeps zoom per site, so
+  // this also fixes that site's other windows. Only a fresh request counts (one made
+  // while this helper was asleep still does); old ones never replay.
+  const z = plan.zoomReset || {n: 0, at: 0};
+  const zoomNow = z.n > 0 && z.n !== zoomSeen && Date.now() - z.at < 20000;
+  zoomSeen = z.n;
+  if (zoomNow) {
+    for (const win of wins) {
+      if (!role.has(win.id)) continue;
+      for (const tab of win.tabs || []) await chrome.tabs.setZoom(tab.id, 0).catch(() => {});
+    }
+  }
   for (const win of wins) {
     if (!role.has(win.id)) continue; // never touch the user's own windows
     const mute = !role.get(win.id);
@@ -38,7 +52,7 @@ async function loop() {
   running = true;
   while (true) {
     try {
-      const res = await fetch(`${BASE}/api/wall/audio?wait=1&v=${version}`, {cache: 'no-store', headers: {'X-Sportsboard-Helper': '1'}});
+      const res = await fetch(`${BASE}/api/wall/audio?wait=1&v=${version}`, {cache: 'no-store', headers: {'X-Sportsboard-Helper': '1', 'X-Sportsboard-Helper-Version': VERSION}});
       plan = await res.json();
       version = plan.version;
       await enforce();

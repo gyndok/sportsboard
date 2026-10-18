@@ -162,6 +162,13 @@ At the top of the remote:
 
 The **← Board** link opens the scoreboard on your phone. It's handy for checking scores without changing the TV.
 
+At the bottom of the remote, **Fix-its** has two buttons:
+
+| Button | What it does |
+|---|---|
+| **⌘0 Reset zoom on the games** | Puts every game back to normal size, the same as clicking a game window on the Mac and pressing ⌘0. Use it when a game looks blown up or the odds chart is huge. Needs the Sound helper ([section 4](#4-one-time-mac-setup-for-the-tv), step 1). |
+| **⟳ Update & restart** | Does what double-clicking `Restart Sportsboard.command` does: gets the latest version (kept only if its tests pass), then restarts Sportsboard. The games on the TV stay up, and the remote reloads itself when Sportsboard is back, usually within a minute. Only shown when Sportsboard starts automatically ([section 3.4](#34-start-it-automatically)). |
+
 ---
 
 ## 6. Game day
@@ -199,10 +206,12 @@ A status line underneath shows where you are, such as "Playing · 0:45 behind li
 
 ### Odds on screen
 
-Each game on the wall can show a live **win-chance chart** in its top-left corner: both teams' chances over the game, in team colors, with the current percentages at the end of the lines. The numbers come from Polymarket's prediction markets (public prices, no account needed).
+Each game on the wall can show a live **win-chance chart** in a corner of its screen: both teams' chances over the game, in team colors, with the current percentages at the end of the lines. The numbers come from Polymarket's prediction markets (public prices, no account needed).
 
 - **Which game:** YouTube TV tells Chrome the channel ("FOX 26", "NFL ST - CBS"), not the game, so Sportsboard looks for the matchup ("Jets at Patriots") on the page, then the game you picked with a **📺** button, then the channel's network when only one game is live on it. To choose yourself, use the **Chart:** menu under each screen in **Odds on screen** on the remote: pick any of today's games and that screen shows its chart, whatever the stream says, until you set it back to **Chart: automatic** or change the screen's channel from the remote. A game that runs past its time slot keeps its chart (YouTube TV's page has moved on to the next program by then) until it ends or you change the channel.
 - **Delay:** market prices move about 10–20 seconds before the TV shows the play, so the chart runs behind live. Set the delay with **−5 / −1 / +1 / +5** under **Odds on screen** (default 20 s). Wait for a big play: if the chart moves before you see it, add delay; if after, take some away. Pausing or rewinding a game adds to the delay automatically.
+- **Move it:** if the chart covers the score or anything else you want to see, tap **↖ ↗ ↙ ↘** under that screen in **Odds on screen** to put it in another corner. **✕** hides the chart on that screen only. Each screen keeps its own corner.
+- **Size:** **Small**, **Medium** or **Large** sets the size on every screen. Medium is a quarter of the game's width.
 - **Off:** untick **Win-chance chart on each game**.
 
 Only games with a Polymarket market get a chart. Most NFL, college football, NBA, NHL and MLB games have one; smaller games may not.
@@ -307,7 +316,7 @@ If a YouTube scene can't be played, Calm skips it and moves on.
 ## 9. Updates
 
 - **Installed with git (Option A):** each time Sportsboard starts, it checks GitHub for a new version, at most once an hour. It installs the update only if the update's built-in tests pass on your Mac; otherwise it stays on the version you have.
-- **To update right now:** double-click **`Restart Sportsboard.command`**. It updates, restarts Sportsboard, and opens the remote.
+- **To update right now:** tap **⟳ Update & restart** under **Fix-its** on the remote, or double-click **`Restart Sportsboard.command`** on the Mac. Both update and restart Sportsboard.
 - **After an update:** if the Sound helper misbehaves, go to `chrome://extensions` and click **⟳** on the Sportsboard Sound card.
 - **Installed from a ZIP (Option B):** download a new ZIP and replace the folder's files. Keep your `wall-config.json`, which holds your channel presets and scenes. Then double-click `Restart Sportsboard.command`.
 
@@ -331,6 +340,8 @@ Your settings live in `wall-config.json` (channels, scenes, schedule) and `wall-
 | Scores are missing or say a feed is unavailable | ESPN's feed is down or slow. Sportsboard keeps the last scores and retries every 30 seconds. |
 | The TV goes to "no signal" | The Mac went to sleep. See [section 4](#4-one-time-mac-setup-for-the-tv), step 8. |
 | The games are on the wrong screen | Pick the right one under **TV screen** on the remote. If the remote says the screen you picked isn't connected, plug it in (or pick another); meanwhile the wall uses the main screen. |
+| A game looks zoomed in, or its odds chart is huge | Tap **⌘0 Reset zoom on the games** under **Fix-its**. If the remote says to update the Sound helper, click **⟳** on its card in `chrome://extensions` first. |
+| The odds chart covers the score | Move it to another corner with **↖ ↗ ↙ ↘** under that screen in **Odds on screen**, or tap **✕** to hide it there. |
 | Something else | Look at `log.txt` in the `sportsboard` folder for error messages, then double-click `Restart Sportsboard.command`. |
 
 ---
