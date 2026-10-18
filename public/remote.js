@@ -57,6 +57,7 @@ function render() {
   $('#sound-hint').hidden = !!wall.soundHelper || s.mode !== 'grid';
   $('#sound-hint').textContent = 'Sound switching is in basic mode. Install the Sportsboard Sound helper in Chrome on the Mini so only the chosen screen ever plays (see README).';
   renderOdds();
+  renderTools();
   $('#clean').checked = s.clean !== false;
   // Which screen gets the wall (only offered when the Mac has more than one).
   const ds = wall.displays || [];
@@ -103,18 +104,23 @@ function renderOdds() {
   $('#odds-on').checked = o.on;
   $('#odds-delay-val').textContent = `${o.delay}s`;
   document.querySelectorAll('#odds-delay button').forEach(b => { b.disabled = !o.on; });
+  $('#odds-size').hidden = !o.on;
+  document.querySelectorAll('#odds-size button').forEach(b => b.setAttribute('aria-pressed', b.dataset.size === (o.size || 'M')));
   const pc = p => p < 0.005 ? '<1' : p > 0.995 ? '>99' : Math.round(p * 100);
   // Every screen can be set by hand; "Automatic" lets Sportsboard work it out from the stream.
+  // Which corner the chart sits in on each screen (✕ hides it there).
+  const corners = x => `<span class="corners" role="group" aria-label="Where the chart goes on screen ${x.screen}">${[['tl', '↖', 'Top left'], ['tr', '↗', 'Top right'], ['bl', '↙', 'Bottom left'], ['br', '↘', 'Bottom right'], ['off', '✕', 'Hide on this screen']]
+    .map(([c, icon, name]) => `<button data-corner="${c}" data-screen="${esc(x.uid)}" aria-pressed="${(x.corner || 'tl') === c}" aria-label="${name}" title="${name}">${icon}</button>`).join('')}</span>`;
   const pick = x => `<select data-link="${esc(x.uid)}" aria-label="Game for the chart on screen ${x.screen}"><option value="">Chart: automatic</option>${liveGames.map(e => `<option value="${esc(e.league)}:${esc(e.id)}" ${x.hand && x.hand === `${e.league}:${e.id}` ? 'selected' : ''}>Chart: ${esc(e.teams.map(t => t.abbr).join(' @ '))}${e.state === 'in' ? '' : ' · ' + esc(new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}))}</option>`).join('')}</select>`;
   $('#odds-screens').innerHTML = o.on ? (o.screens || []).map(x => {
     if (!x.game) {
       const seen = (x.seen || []).filter(t => t !== x.title);
-      return `<p>Screen ${x.screen} · <small>${x.title ? `no game found in “${esc(x.title)}”` : 'no title from this stream'}${seen.length ? ` (also saw: ${seen.map(t => `“${esc(t)}”`).join(', ')})` : ''}</small>${pick(x)}</p>`;
+      return `<p>Screen ${x.screen} · <small>${x.title ? `no game found in “${esc(x.title)}”` : 'no title from this stream'}${seen.length ? ` (also saw: ${seen.map(t => `“${esc(t)}”`).join(', ')})` : ''}</small>${pick(x)}${corners(x)}</p>`;
     }
     const [a, h] = x.game.split(' @ ');
     const odds = x.chance ? `${esc(a)} ${pc(x.chance.away)}% · ${esc(h)} ${pc(x.chance.home)}%` : x.market ? 'waiting for prices' : 'no Polymarket market for this game';
     const via = {picked: x.hand ? ' · set by hand' : ' · picked from Games', network: ` · only game live on ${esc(x.title)}`, kept: ' · still on, past its time slot'}[x.via] || '';
-    return `<p>Screen ${x.screen} · ${esc(x.game)} <small>${odds}${x.behind > 3 ? ` · ${x.behind}s behind live` : ''}${via}</small>${pick(x)}</p>`;
+    return `<p>Screen ${x.screen} · ${esc(x.game)} <small>${x.corner === 'off' ? 'chart hidden · ' : ''}${odds}${x.behind > 3 ? ` · ${x.behind}s behind live` : ''}${via}</small>${pick(x)}${corners(x)}</p>`;
   }).join('') : '';
 }
 async function setOdds(body) {
@@ -133,7 +139,47 @@ $('#odds-screens').addEventListener('change', e => {
   $('#status').textContent = sel.value ? 'Chart set · it appears within about 10 seconds' : 'Chart back to automatic';
   setTimeout(load, 6000);
 });
+$('#odds-size').addEventListener('click', e => { const b = e.target.closest('[data-size]'); if (b) setOdds({size: b.dataset.size}); });
+$('#odds-screens').addEventListener('click', e => {
+  const b = e.target.closest('[data-corner]'); if (!b) return;
+  for (const x of wall.odds?.screens || []) if (x.uid === b.dataset.screen) x.corner = b.dataset.corner; // show it right away
+  renderOdds();
+  setOdds({corner: {screen: b.dataset.screen, corner: b.dataset.corner}});
+});
 $('#odds-delay').addEventListener('click', e => { const b = e.target.closest('[data-nudge]'); if (b && !b.disabled) setOdds({nudge: Number(b.dataset.nudge)}); });
+// ---------- fix-its ----------
+const toolsSay = t => { $('#tools-status').textContent = t; };
+$('#zoom-reset').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/wall/zoom', {method: 'POST'});
+    const d = await r.json().catch(() => ({}));
+    toolsSay(r.ok ? 'Zoom reset · every game is back to normal size.' : d.error || 'That didn’t work.');
+  } catch { toolsSay('The Mini didn’t respond.'); }
+});
+$('#restart').addEventListener('click', async () => {
+  if (!confirm('Update and restart Sportsboard? It takes about a minute, and the games on the TV stay up.')) return;
+  const was = wall?.started;
+  $('#restart').disabled = true;
+  toolsSay('Checking GitHub for an update…');
+  try {
+    const r = await fetch('/api/wall/restart', {method: 'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toolsSay(d.error || 'That didn’t work.'); $('#restart').disabled = false; return; }
+    toolsSay(`${d.update ? d.update + ' ' : ''}Restarting…`);
+  } catch { toolsSay('Restarting…'); }
+  // Wait for the new copy to answer, then reload so the remote is the new version too.
+  const t0 = Date.now();
+  const tick = async () => {
+    try { const w = await (await fetch('/api/wall', {cache: 'no-store'})).json(); if (w.started && w.started !== was) return location.reload(); } catch {}
+    if (Date.now() - t0 > 120000) { toolsSay('Sportsboard hasn’t come back yet. On the Mini, double-click Restart Sportsboard.command.'); $('#restart').disabled = false; return; }
+    setTimeout(tick, 2000);
+  };
+  setTimeout(tick, 3000);
+});
+function renderTools() {
+  $('#zoom-reset').disabled = wall.state.mode !== 'grid';
+  $('#restart').hidden = wall.canRestart === false;
+}
 function incr(a) { return a.split('/').map(Number).map(n => n + 1).join('/'); }
 
 const slotsCopy = () => wall.state.slots.map(s => ({...s}));

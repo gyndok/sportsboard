@@ -33,7 +33,7 @@ export const defaultConfig = {
   rotateMinutes: 20,
   // Live win-probability chart over each game (Polymarket). delay: seconds behind the market,
   // since prices move 10–20 s before the broadcast shows the play.
-  odds: {on: true, delay: 20},
+  odds: {on: true, delay: 20, size: 'M', corners: {}}, // corners: screen uid -> tl | tr | bl | br | off
   scenes: [
     {id: 'aerial-ocean', name: 'Ocean & underwater', type: 'aerial', filter: 'underwater|ocean|sea'},
     {id: 'aerial-landscape', name: 'Landscapes', type: 'aerial', filter: 'landscape'},
@@ -128,6 +128,8 @@ const defaultState = () => ({
 });
 
 let config = structuredClone(defaultConfig);
+const ODDS_SIZES = {S: 0.18, M: 0.25, L: 0.32}; // win-chance chart width, as a share of the window
+const ODDS_CORNERS = ['tl', 'tr', 'bl', 'br', 'off'];
 let state = defaultState();
 let base = 'http://127.0.0.1:8787';
 let lock = Promise.resolve();
@@ -136,17 +138,18 @@ let muteTimer = null;
 // ---------- sound helper (Chrome extension in ./chrome-extension) ----------
 // The extension long-polls /api/wall/audio and uses Chrome's tab mute, which web
 // players can't override. Page-level muting is only the fallback without it.
-let audioVersion = 0, helperSeen = 0;
+let audioVersion = 0, helperSeen = 0, helperVersion = '';
+let zoomReset = {n: 0, at: 0}; // bumped by the remote's Reset zoom; the helper resets Chrome zoom on the wall windows
 const audioWaiters = new Set();
 const helperActive = () => Date.now() - helperSeen < 90000;
 function bumpAudio() { audioVersion++; for (const w of audioWaiters) w(); audioWaiters.clear(); }
 function audioPlan() {
-  if (state.mode !== 'grid') return {version: audioVersion, active: false, wall: []};
+  if (state.mode !== 'grid') return {version: audioVersion, active: false, wall: [], zoomReset};
   const rectOf = key => state.actual?.[key] || null;
   const wall = visibleSlots().map(s => ({key: `slot:${s.uid}`, audio: s.uid === state.audio, rect: rectOf(`slot:${s.uid}`)}))
     .concat(state.sidebar ? [{key: 'sidebar', audio: false, rect: rectOf('sidebar')}] : [])
     .filter(w => w.rect);
-  return {version: audioVersion, active: true, audio: state.audio, wall};
+  return {version: audioVersion, active: true, audio: state.audio, wall, zoomReset};
 }
 
 // ---------- persistence: atomic, serialized writes with a last-good copy ----------
@@ -193,7 +196,9 @@ function sanitizeConfig(saved) {
   c.schedule = keep(c.schedule, x => isObj(x) && /^\d{2}:\d{2}$/.test(x.from || '') && Array.isArray(x.scenes), 'schedule blocks') || structuredClone(defaultConfig.schedule);
   if (!(c.rotateMinutes >= 1 && c.rotateMinutes <= 1440)) c.rotateMinutes = defaultConfig.rotateMinutes;
   if (!(c.titlebar >= 0 && c.titlebar <= 80)) c.titlebar = defaultConfig.titlebar;
-  c.odds = {on: typeof c.odds?.on === 'boolean' ? c.odds.on : true, delay: Number.isFinite(c.odds?.delay) && c.odds.delay >= 0 && c.odds.delay <= 120 ? Math.round(c.odds.delay) : 20};
+  c.odds = {on: typeof c.odds?.on === 'boolean' ? c.odds.on : true, delay: Number.isFinite(c.odds?.delay) && c.odds.delay >= 0 && c.odds.delay <= 120 ? Math.round(c.odds.delay) : 20,
+    size: Object.hasOwn(ODDS_SIZES, c.odds?.size ?? '') ? c.odds.size : 'M',
+    corners: Object.fromEntries(Object.entries(isObj(c.odds?.corners) ? c.odds.corners : {}).filter(([k, v]) => /^[a-z0-9]{1,12}$/.test(k) && ODDS_CORNERS.includes(v)).slice(0, 16))};
   return c;
 }
 
@@ -417,6 +422,7 @@ out.position=Math.round(v.currentTime);out.duration=isFinite(v.duration)?Math.ro
 return JSON.stringify(out)})()`;
 
 // ---------- odds chart over each game ----------
+const oddsLook = uid => ({corner: config.odds.corners?.[uid] || 'tl', size: ODDS_SIZES[config.odds.size] || 0.25});
 // Runs inside a stream page: reports what it's playing (the media title the page gives
 // Chrome, and how far behind live the video is) and draws or removes the chart. Built
 // with DOM calls, not innerHTML, because YouTube's pages only accept trusted HTML.
@@ -433,13 +439,14 @@ const out=JSON.stringify({title,cands,behind,paused:v?v.paused:null});
 let box=document.getElementById('sb-odds');
 if(!d){if(box)box.remove();return out}
 const NS='http://www.w3.org/2000/svg',el=(n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
-if(!box){box=document.createElement('div');box.id='sb-odds';box.style.cssText='position:fixed;left:1.6vw;top:2.4vh;z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .8s;filter:drop-shadow(0 2px 6px #000a)';document.documentElement.appendChild(box);requestAnimationFrame(()=>requestAnimationFrame(()=>{box.style.opacity='1'}))}
+if(!box){box=document.createElement('div');box.id='sb-odds';box.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .8s;filter:drop-shadow(0 2px 6px #000a)';document.documentElement.appendChild(box);requestAnimationFrame(()=>requestAnimationFrame(()=>{box.style.opacity='1'}))}
 // A quarter of the window (220-560 screen points), whatever the zoom. Chrome's own zoom
 // for a site (remembered per site, so every YouTube TV window shares it) shrinks the page's
 // CSS pixels: outerWidth (screen points) / innerWidth (CSS px) is that zoom. A page that
 // zooms itself with CSS zoom scales the chart too, so measure it and undo that as well.
 const pz=outerWidth>0&&innerWidth>0&&outerWidth/innerWidth>.2&&outerWidth/innerWidth<10?outerWidth/innerWidth:1;
-const want=Math.round(Math.min(560,Math.max(220,innerWidth*pz*.25))/pz);box.style.zoom='';box.style.width=want+'px';
+const f=d.size||.25,want=Math.round(Math.min(560*f/.25,Math.max(220*f/.25,innerWidth*pz*f))/pz);box.style.zoom='';box.style.width=want+'px';
+const c=d.corner||'tl';box.style.left=c[1]==='l'?'1.6vw':'auto';box.style.right=c[1]==='r'?'1.6vw':'auto';box.style.top=c[0]==='t'?'2.4vh':'auto';box.style.bottom=c[0]==='b'?'2.4vh':'auto';
 const got=box.getBoundingClientRect().width;if(got>0&&Math.abs(got/want-1)>.02)box.style.zoom=String(want/got);
 const W=320,H=128,L=8,R=232,T=22,B=118,y=p=>B-(B-T)*p,x=f=>L+(R-L)*f;
 const svg=el('svg',{viewBox:'0 0 '+W+' '+H,width:'100%',style:'display:block;overflow:visible'});
@@ -538,13 +545,14 @@ async function oddsTick() {
       if (found) screenGame.set(x.uid, {league: found.league, id: found.event.id, channel: r?.title || ''});
       else screenGame.delete(x.uid);
       const uid = x.uid;
-      if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, hand: null, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
+      if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, corner: oddsLook(x.uid).corner, hand: null, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
       const game = await liveGame(found.league, found.event).catch(() => null);
       const delay = config.odds.delay + (r?.behind > 3 ? r.behind : 0);
-      const data = game && chartData(game, delay);
-      if (data) oddsDraw.set(x.id, data); else oddsDraw.delete(x.id);
+      const look = oddsLook(x.uid), base = game && chartData(game, delay);
+      const data = base && {...base, ...look};
+      if (data && look.corner !== 'off') oddsDraw.set(x.id, data); else oddsDraw.delete(x.id);
       const hintNow = slotGame.get(x.uid);
-      status.push({screen, uid, hand: hintNow?.hand ? `${hintNow.league}:${hintNow.id}` : null, title: r?.title || '', via, game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
+      status.push({screen, uid, corner: look.corner, hand: hintNow?.hand ? `${hintNow.league}:${hintNow.id}` : null, title: r?.title || '', via, game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
     }));
     for (const id of [...oddsDraw.keys()]) if (!list.some(x => x.id === id)) oddsDraw.delete(id);
     for (const id of [...oddsDrawn]) if (!list.some(x => x.id === id)) oddsDrawn.delete(id);
@@ -765,6 +773,22 @@ function youtubeId(input) {
   return null;
 }
 
+// ---------- update & restart ----------
+const APP_DIR = fileURLToPath(new URL('.', import.meta.url));
+// Running under the autostart LaunchAgent (it sets SPORTSBOARD_NODE; launchd names the job)?
+// Only then does exiting mean "restart": launchd starts it again right away.
+const underService = () => !!process.env.SPORTSBOARD_NODE || /sportsboard/i.test(process.env.XPC_SERVICE_NAME || '');
+let restarting = false;
+const BOOT = Date.now(); // tells the remote a restart has finished
+function runUpdate() {
+  return new Promise(resolve => execFile('/bin/zsh', ['./update.sh'], {cwd: APP_DIR, timeout: 180000}, async (err, stdout) => {
+    await writeFile(path.join(APP_DIR, '.last-update-check'), '').catch(() => {}); // start.sh needn't check again
+    const text = String(stdout || '').trim().split('\n').filter(Boolean).pop() || (err ? `Update check failed: ${err.message}` : '');
+    resolve(text.slice(0, 300));
+  }));
+}
+const versionBelow = (v, min) => { const a = v.split('.').map(Number), b = min.split('.').map(Number); for (let i = 0; i < 2; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); } return false; };
+
 // ---------- HTTP ----------
 function lanAddresses(port) {
   try { return Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => `http://${i.address}:${port}/remote`); }
@@ -865,11 +889,14 @@ export async function handleWall(req, res, url, port) {
       if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
     }
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
+      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
         displays: (await listDisplays(20000)).map(({id, name, primary, frame}) => ({id, name, primary, width: Math.round(frame.width), height: Math.round(frame.height)}))});
     } else if (p === '/api/wall/audio') {
       // Only the Sportsboard Sound extension counts as "the helper is running".
-      if (req.headers['x-sportsboard-helper'] === '1' || /^chrome-extension:\/\//.test(req.headers.origin || '')) helperSeen = Date.now();
+      if (req.headers['x-sportsboard-helper'] === '1' || /^chrome-extension:\/\//.test(req.headers.origin || '')) {
+        helperSeen = Date.now();
+        helperVersion = String(req.headers['x-sportsboard-helper-version'] || '').slice(0, 12);
+      }
       const since = Number(url.searchParams.get('v'));
       if (url.searchParams.has('wait') && since === audioVersion && audioWaiters.size < 16) {
         await new Promise(resolve => { const done = () => { clearTimeout(t); audioWaiters.delete(done); resolve(); }; const t = setTimeout(done, 25000); audioWaiters.add(done); req.on('close', done); });
@@ -925,6 +952,24 @@ export async function handleWall(req, res, url, port) {
       }
       if (!isObj(d)) return send(res, 502, {error: 'That screen didn\'t respond.'}), true;
       send(res, d.ok ? 200 : 422, {...d, screen: shown.indexOf(slot) + 1});
+    } else if (p === '/api/wall/zoom' && req.method === 'POST') {
+      // ⌘0 for the wall: the Sound helper resets Chrome's zoom on the game windows. Chrome
+      // keeps zoom per site, so this fixes every window of that site.
+      if (state.mode !== 'grid') return send(res, 409, {error: 'Reset zoom works in Game day.'}), true;
+      if (!helperActive()) return send(res, 409, {error: 'This needs the Sportsboard Sound helper in Chrome on the Mini (see the manual). Until then: click a game window and press ⌘0.'}), true;
+      if (!/^(\d+)\.(\d+)/.test(helperVersion) || versionBelow(helperVersion, '1.2')) return send(res, 409, {error: 'Update the Sound helper first: on the Mini open chrome://extensions and click ⟳ on the Sportsboard Sound card, then try again.'}), true;
+      zoomReset = {n: zoomReset.n + 1, at: Date.now()};
+      bumpAudio();
+      send(res, 200, {ok: true});
+    } else if (p === '/api/wall/restart' && req.method === 'POST') {
+      // Restart Sportsboard.command from the remote: update (kept only if its tests pass),
+      // then exit; the autostart service starts the new version. Wall windows stay open.
+      if (TESTING || process.platform !== 'darwin' || !underService()) return send(res, 409, {error: 'Restart from the remote only works when Sportsboard runs as the autostart service. On the Mini, double-click Restart Sportsboard.command.'}), true;
+      if (restarting) return send(res, 409, {error: 'Already restarting…'}), true;
+      restarting = true;
+      const update = await runUpdate();
+      send(res, 200, {ok: true, update});
+      setTimeout(async () => { await Promise.all([...writeChains.values()]).catch(() => {}); process.exit(0); }, 800);
     } else if (p === '/api/wall/odds' && req.method === 'POST') {
       // Chart on/off and its delay, from the remote.
       const b = await readBody(req);
@@ -939,8 +984,22 @@ export async function handleWall(req, res, url, port) {
         else if (isObj(g) && Object.hasOwn(GAME_LEAGUES, g.league) && /^\d{1,15}$/.test(String(g.id || ''))) slotGame.set(b.link.screen, {league: g.league, id: String(g.id), hand: true});
         else return send(res, 400, {error: 'Bad game'}), true;
       }
+      if (b.size !== undefined) { if (!Object.hasOwn(ODDS_SIZES, b.size)) return send(res, 400, {error: 'Size must be S, M or L'}), true; next.size = b.size; }
+      if (b.corner !== undefined) { // move (or hide) the chart on one screen
+        if (!isObj(b.corner) || typeof b.corner.screen !== 'string' || !state.slots.some(sl => sl.uid === b.corner.screen)) return send(res, 400, {error: 'Unknown screen'}), true;
+        if (!ODDS_CORNERS.includes(b.corner.corner)) return send(res, 400, {error: 'Pick a corner'}), true;
+        const live = new Set(state.slots.map(sl => sl.uid));
+        next.corners = Object.fromEntries(Object.entries({...next.corners, [b.corner.screen]: b.corner.corner}).filter(([k, v]) => live.has(k) && v !== 'tl'));
+      }
       next.delay = Math.max(0, Math.min(120, Math.round(next.delay)));
       config.odds = next;
+      // Redraw what's already up with the new place and size now, not on the next price tick.
+      for (const sl of state.slots) {
+        const id = state.windows[`slot:${sl.uid}`], d = id && oddsDraw.get(id);
+        if (!d) continue;
+        const look = oddsLook(sl.uid);
+        if (look.corner === 'off') oddsDraw.delete(id); else oddsDraw.set(id, {...d, ...look});
+      }
       await saveConfig();
       if (!next.on) oddsDraw.clear();
       oddsTick().catch(() => {});

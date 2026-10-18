@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from '../server.mjs';
-import {PAGE_JS, YT_JS, PLAY_JS, PLAY_ACTIONS} from '../wall.mjs';
+import {PAGE_JS, YT_JS, PLAY_JS, PLAY_ACTIONS, ODDS_JS} from '../wall.mjs';
 import os from 'node:os';
 import {mkdtemp, mkdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
@@ -359,3 +359,41 @@ test('a game that runs past its time slot keeps its chart until the channel chan
   assert.equal(stickyGame(none, mem, 'NFL ST - CBS', {NFL: [{...nyjNe, state: 'post'}]}).found, null);
   assert.equal(stickyGame(none, null, 'FOX 26', events).found, null);
 });
+
+test('chart corner and size: validated, saved, and the chart script takes them', () => withServer(async base => {
+  const post = body => fetch(`${base}/api/wall/odds`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const get = async () => (await fetch(`${base}/api/wall`)).json();
+  const uid = (await get()).state.slots[0].uid;
+  let d = await (await post({size: 'L'})).json(); assert.equal(d.odds.size, 'L');
+  for (const bad of ['XL', 'constructor', '__proto__', 3, null]) assert.equal((await post({size: bad})).status, 400, String(bad));
+  d = await (await post({corner: {screen: uid, corner: 'br'}})).json(); assert.equal(d.odds.corners[uid], 'br');
+  d = await (await post({corner: {screen: uid, corner: 'off'}})).json(); assert.equal(d.odds.corners[uid], 'off', 'hidden on that screen');
+  assert.equal((await get()).odds.corners[uid], 'off', 'kept');
+  d = await (await post({corner: {screen: uid, corner: 'tl'}})).json(); assert.equal(d.odds.corners[uid], undefined, 'top left is the default');
+  for (const bad of [{screen: uid, corner: 'middle'}, {screen: 'nope', corner: 'tr'}, 'tr', {screen: uid}]) assert.equal((await post({corner: bad})).status, 400, JSON.stringify(bad));
+  await post({size: 'M'});
+  const data = {delay: 20, pts: [[0, 0.5], [1, 0.6]], away: {abbr: 'BUF', p: 0.4, color: '#00338d'}, home: {abbr: 'KC', p: 0.6, color: '#e31837'}};
+  for (const look of [{}, {corner: 'br', size: 0.32}, {corner: 'tr', size: 0.18}]) assert.doesNotThrow(() => new Function(ODDS_JS.replace('__DATA__', JSON.stringify({...data, ...look}))), JSON.stringify(look));
+}));
+
+test('reset zoom needs Game day and an up-to-date Sound helper; restart only runs as the service', () => withServer(async base => {
+  const post = (path, body = {}) => fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const before = (await (await fetch(`${base}/api/wall`)).json()).state.mode;
+  assert.equal((await fetch(`${base}/api/wall/zoom`)).status, 405);
+  await post('/api/wall', {mode: 'calm'});
+  let r = await post('/api/wall/zoom'); assert.equal(r.status, 409); assert.match((await r.json()).error, /Game day/);
+  await post('/api/wall', {mode: 'grid'});
+  await fetch(`${base}/api/wall/audio`, {headers: {'X-Sportsboard-Helper': '1'}}); // an older helper sends no version
+  r = await post('/api/wall/zoom'); assert.equal(r.status, 409); assert.match((await r.json()).error, /Update the Sound helper/);
+  const plan0 = await (await fetch(`${base}/api/wall/audio`, {headers: {'X-Sportsboard-Helper': '1', 'X-Sportsboard-Helper-Version': '1.2'}})).json();
+  assert.equal((await post('/api/wall/zoom')).status, 200);
+  const plan = await (await fetch(`${base}/api/wall/audio?wait=1&v=${plan0.version}`, {headers: {'X-Sportsboard-Helper': '1', 'X-Sportsboard-Helper-Version': '1.2'}})).json();
+  assert.ok(plan.version > plan0.version, 'the helper hears about it straight away');
+  assert.equal(plan.zoomReset.n, plan0.zoomReset.n + 1);
+  assert.ok(Date.now() - plan.zoomReset.at < 5000);
+  r = await post('/api/wall/restart'); assert.equal(r.status, 409); assert.match((await r.json()).error, /Restart Sportsboard\.command/);
+  assert.equal((await fetch(`${base}/api/wall/restart`)).status, 405);
+  assert.equal((await fetch(`${base}/api/wall/restart`, {method: 'POST', headers: {Origin: 'http://evil.example'}})).status, 403);
+  assert.equal(typeof (await (await fetch(`${base}/api/wall`)).json()).started, 'number');
+  await post('/api/wall', {mode: before});
+}));

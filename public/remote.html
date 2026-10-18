@@ -35,12 +35,13 @@
     </div>
     <div id="odds-wrap">
       <h2>Odds on screen <small>Polymarket</small></h2>
-      <label class="switch"><input type="checkbox" id="odds-on"><span>Win-chance chart on each game <small>(top-left corner)</small></span></label>
+      <label class="switch"><input type="checkbox" id="odds-on"><span>Win-chance chart on each game <small>(move or hide it per screen below)</small></span></label>
       <div class="pb odds-delay" id="odds-delay">
         <button data-nudge="-5" aria-label="5 seconds less delay">−5</button><button data-nudge="-1" aria-label="1 second less delay">−1</button>
         <output id="odds-delay-val" aria-live="polite">20s</output>
         <button data-nudge="1" aria-label="1 second more delay">+1</button><button data-nudge="5" aria-label="5 seconds more delay">+5</button>
       </div>
+      <div class="seg" id="odds-size" role="group" aria-label="Chart size"><button data-size="S">Small</button><button data-size="M">Medium</button><button data-size="L">Large</button></div>
       <div id="odds-screens"></div>
       <p class="hint">Prices move about 10–20 seconds before the TV shows the play, so the chart runs this far behind. After a big play: if the chart moved first, add delay; if it moved late, take some away. Pausing or rewinding a game adds to it automatically.</p>
     </div>
@@ -75,6 +76,15 @@
 
   <section id="sb-panel" class="panel"><p class="hint">Sportsboard is full screen on the TV.</p></section>
   <section id="off-panel" class="panel"><p class="hint">Wall windows are closed. Pick a mode to start.</p></section>
+
+  <section id="tools">
+    <h2>Fix-its</h2>
+    <div class="sound-bar tools">
+      <button id="zoom-reset"><b>⌘0</b><small>Reset zoom on the games</small></button>
+      <button id="restart"><b>⟳</b><small>Update &amp; restart</small></button>
+    </div>
+    <p class="hint" id="tools-status" role="status">Reset zoom puts every game back to normal size, like ⌘0 on the Mini. Update &amp; restart does what Restart Sportsboard.command does; the TV keeps its games.</p>
+  </section>
 </main>
 <footer class="rfoot" id="phone"></footer>
 </body></html>
