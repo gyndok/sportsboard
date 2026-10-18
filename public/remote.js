@@ -112,7 +112,7 @@ function renderOdds() {
     }
     const [a, h] = x.game.split(' @ ');
     const odds = x.chance ? `${esc(a)} ${pc(x.chance.away)}% · ${esc(h)} ${pc(x.chance.home)}%` : x.market ? 'waiting for prices' : 'no Polymarket market for this game';
-    const via = {picked: ' · picked from Games', network: ` · only game live on ${esc(x.title)}`}[x.via] || '';
+    const via = {picked: ' · picked from Games', network: ` · only game live on ${esc(x.title)}`, kept: ' · still on, past its time slot'}[x.via] || '';
     return `<p>Screen ${x.screen} · ${esc(x.game)} <small>${odds}${x.behind > 3 ? ` · ${x.behind}s behind live` : ''}${via}</small>${x.via === 'picked' || x.via === 'network' ? ' ' + pick(x) : ''}</p>`;
   }).join('') : '';
 }

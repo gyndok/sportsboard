@@ -491,6 +491,19 @@ function networksFor(title) {
   return [...out].filter(Boolean);
 }
 
+// A game that runs past its time slot: YouTube TV's page moves on to the next scheduled
+// program, so the matchup text vanishes or names the next game. Each screen keeps the game
+// it was showing while that game is still live and the channel hasn't changed; a different
+// game that is also live (a real channel change) still takes over.
+const screenGame = new Map(); // slot uid -> {league, id, channel}
+export function stickyGame(picked, memory, channel, events) {
+  const was = memory && (events[memory.league] || []).find(e => e.id === memory.id);
+  const keep = was && was.state === 'in' && memory.channel === channel;
+  if (!keep) return picked;
+  if (picked.found && picked.found.event.id !== was.id && (picked.found.event.state === 'in' || picked.via === 'picked')) return picked;
+  return {found: {league: memory.league, event: was}, via: picked.found?.event.id === was.id ? picked.via : 'kept'};
+}
+
 async function oddsTick() {
   if (oddsBusy || process.platform !== 'darwin' || TESTING) return;
   oddsBusy = true;
@@ -513,7 +526,10 @@ async function oddsTick() {
     await Promise.all(list.map(async (x, i) => {
       let r = null; try { r = JSON.parse(reports?.[i] || 'null'); } catch {}
       const screen = shown.findIndex(s => s.uid === x.uid) + 1;
-      const {found, via} = whichGame(r, slotGame.get(x.uid), events);
+      const picked = whichGame(r, slotGame.get(x.uid), events);
+      const {found, via} = stickyGame(picked, screenGame.get(x.uid), r?.title || '', events);
+      if (found) screenGame.set(x.uid, {league: found.league, id: found.event.id, channel: r?.title || ''});
+      else screenGame.delete(x.uid);
       const uid = x.uid;
       if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
       const game = await liveGame(found.league, found.event).catch(() => null);
