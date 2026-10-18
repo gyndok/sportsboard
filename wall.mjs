@@ -433,7 +433,11 @@ const out=JSON.stringify({title,cands,behind,paused:v?v.paused:null});
 let box=document.getElementById('sb-odds');
 if(!d){if(box)box.remove();return out}
 const NS='http://www.w3.org/2000/svg',el=(n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
-if(!box){box=document.createElement('div');box.id='sb-odds';box.style.cssText='position:fixed;left:1.6vw;top:2.4vh;width:clamp(220px,25vw,560px);z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .8s;filter:drop-shadow(0 2px 6px #000a)';document.documentElement.appendChild(box);requestAnimationFrame(()=>requestAnimationFrame(()=>{box.style.opacity='1'}))}
+if(!box){box=document.createElement('div');box.id='sb-odds';box.style.cssText='position:fixed;left:1.6vw;top:2.4vh;z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .8s;filter:drop-shadow(0 2px 6px #000a)';document.documentElement.appendChild(box);requestAnimationFrame(()=>requestAnimationFrame(()=>{box.style.opacity='1'}))}
+// A quarter of the window (220-560 px). Pages that zoom themselves up on a big screen
+// (YouTube TV does) would zoom the chart too, so measure it and undo that zoom.
+const want=Math.round(Math.min(560,Math.max(220,innerWidth*.25)));box.style.zoom='';box.style.width=want+'px';
+const got=box.getBoundingClientRect().width;if(got>0&&Math.abs(got/want-1)>.02)box.style.zoom=String(want/got);
 const W=320,H=128,L=8,R=232,T=22,B=118,y=p=>B-(B-T)*p,x=f=>L+(R-L)*f;
 const svg=el('svg',{viewBox:'0 0 '+W+' '+H,width:'100%',style:'display:block;overflow:visible'});
 const g=el('linearGradient',{id:'sbog',x1:0,x2:1},el('defs',{},svg));el('stop',{offset:0,'stop-color':'#000','stop-opacity':.72},g);el('stop',{offset:1,'stop-color':'#000','stop-opacity':.38},g);
