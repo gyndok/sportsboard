@@ -434,9 +434,12 @@ let box=document.getElementById('sb-odds');
 if(!d){if(box)box.remove();return out}
 const NS='http://www.w3.org/2000/svg',el=(n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
 if(!box){box=document.createElement('div');box.id='sb-odds';box.style.cssText='position:fixed;left:1.6vw;top:2.4vh;z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .8s;filter:drop-shadow(0 2px 6px #000a)';document.documentElement.appendChild(box);requestAnimationFrame(()=>requestAnimationFrame(()=>{box.style.opacity='1'}))}
-// A quarter of the window (220-560 px). Pages that zoom themselves up on a big screen
-// (YouTube TV does) would zoom the chart too, so measure it and undo that zoom.
-const want=Math.round(Math.min(560,Math.max(220,innerWidth*.25)));box.style.zoom='';box.style.width=want+'px';
+// A quarter of the window (220-560 screen points), whatever the zoom. Chrome's own zoom
+// for a site (remembered per site, so every YouTube TV window shares it) shrinks the page's
+// CSS pixels: outerWidth (screen points) / innerWidth (CSS px) is that zoom. A page that
+// zooms itself with CSS zoom scales the chart too, so measure it and undo that as well.
+const pz=outerWidth>0&&innerWidth>0&&outerWidth/innerWidth>.2&&outerWidth/innerWidth<10?outerWidth/innerWidth:1;
+const want=Math.round(Math.min(560,Math.max(220,innerWidth*pz*.25))/pz);box.style.zoom='';box.style.width=want+'px';
 const got=box.getBoundingClientRect().width;if(got>0&&Math.abs(got/want-1)>.02)box.style.zoom=String(want/got);
 const W=320,H=128,L=8,R=232,T=22,B=118,y=p=>B-(B-T)*p,x=f=>L+(R-L)*f;
 const svg=el('svg',{viewBox:'0 0 '+W+' '+H,width:'100%',style:'display:block;overflow:visible'});
