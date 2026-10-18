@@ -57,6 +57,11 @@ function render() {
   $('#sound-hint').hidden = !!wall.soundHelper || s.mode !== 'grid';
   $('#sound-hint').textContent = 'Sound switching is in basic mode. Install the Sportsboard Sound helper in Chrome on the Mini so only the chosen screen ever plays (see README).';
   $('#clean').checked = s.clean !== false;
+  // Which screen gets the wall (only offered when the Mac has more than one).
+  const ds = wall.displays || [];
+  $('#screen-wrap').hidden = ds.length < 2;
+  const onScreen = (s.display && (ds.find(d => d.id === s.display.id) || ds.find(d => d.name === s.display.name))) || ds.find(d => d.primary);
+  $('#displays').innerHTML = ds.map(d => `<button data-display="${d.id}" aria-pressed="${d === onScreen}"><b>${d === onScreen ? '📺 ' : ''}${esc(d.name)}</b><small>${d.width}×${d.height}${d.primary ? ' · main' : ''}</small></button>`).join('');
 
   const cap = wall.layouts[s.layout].slots;
   $('#slots').innerHTML = s.slots.slice(0, cap).map((slot, i) => `
@@ -99,6 +104,11 @@ $('#layouts').addEventListener('click', e => {
   const need = wall.layouts[b.dataset.layout].slots, slots = slotsCopy();
   while (slots.length < need) slots.push({service: 'youtubetv', link: ''});
   patch({layout: b.dataset.layout, slots, solo: null});
+});
+$('#displays').addEventListener('click', e => {
+  const b = e.target.closest('[data-display]'); if (!b) return;
+  const d = (wall.displays || []).find(x => String(x.id) === b.dataset.display); if (!d) return;
+  patch({display: d.primary ? null : {id: d.id, name: d.name}}, 'Moving the wall…');
 });
 $('#clean').addEventListener('change', e => patch({clean: e.target.checked}, e.target.checked ? 'Hiding desktop…' : 'Showing desktop…'));
 // Swap a small screen into the big spot; its sound comes with it.

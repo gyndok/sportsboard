@@ -113,6 +113,7 @@ const defaultState = () => ({
   sidebar: false,
   clean: true,
   cleanPrev: null,
+  display: null, // {id, name} of the screen the wall uses; null = the main display
   audio: null,
   solo: null,
   calm: {pinned: null, clock: true, sound: false, names: false},
@@ -207,7 +208,7 @@ export async function initWall({port}) {
     // Restore field by field: one stale value (say, a pinned scene that was since
     // deleted) is dropped on its own instead of throwing away the whole wall.
     let next = defaultState();
-    for (const key of ['mode', 'layout', 'sidebar', 'clean', 'slots', 'audio', 'solo']) {
+    for (const key of ['mode', 'layout', 'sidebar', 'clean', 'display', 'slots', 'audio', 'solo']) {
       if (saved[key] === undefined) continue;
       try { next = buildCandidate({[key]: saved[key]}, next); } catch (e) { console.error(`Ignoring saved ${key}: ${e.message}`); }
     }
@@ -266,6 +267,40 @@ function osa(body, arg, {chrome = true} = {}) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// ---------- which screen is the TV ----------
+// Every display, in the coordinates Chrome windows use (0,0 = top-left of the main
+// display, the one with the menu bar). NSScreen counts from the bottom, so flip y.
+const DISPLAYS_JS = `ObjC.import('AppKit');const scr=$.NSScreen.screens,n=scr.count,p=scr.objectAtIndex(0).frame,out=[];
+const flip=r=>({x:r.origin.x,y:p.size.height-(r.origin.y+r.size.height),width:r.size.width,height:r.size.height});
+for(let i=0;i<n;i++){const s=scr.objectAtIndex(i);let id=i,name='';
+  try{id=s.deviceDescription.objectForKey('NSScreenNumber').unsignedIntValue}catch(e){}
+  try{name=ObjC.unwrap(s.localizedName)||''}catch(e){}
+  out.push({id,name:name||('Display '+(i+1)),primary:i===0,frame:flip(s.frame),area:flip(s.visibleFrame)})}
+return JSON.stringify(out);`;
+let displayCache = {at: 0, list: []};
+async function listDisplays(maxAgeMs = 0) {
+  if (process.platform !== 'darwin' || TESTING) return [];
+  if (displayCache.list.length && Date.now() - displayCache.at <= maxAgeMs) return displayCache.list;
+  try {
+    const list = await osa(DISPLAYS_JS, null, {chrome: false});
+    if (Array.isArray(list) && list.length) displayCache = {at: Date.now(), list};
+  } catch (e) { console.error(`Couldn't list displays: ${e.message}`); }
+  return displayCache.list;
+}
+// The screen the wall uses: the one picked on the remote if it's connected, else the
+// main display. wallOnMain decides whether the wall may hide the Dock and menu bar,
+// move the pointer and bring Chrome forward: on a second screen it leaves those to
+// whoever is working on the main one.
+let wallOnMain = true;
+async function wallScreen() {
+  const list = await listDisplays();
+  const want = state.display;
+  const picked = want && (list.find(d => d.id === want.id) || list.find(d => d.name === want.name));
+  const s = picked || list.find(d => d.primary);
+  if (!s) { wallOnMain = true; return {area: await screenArea(), primary: true, missing: false}; } // couldn't list displays: old behaviour
+  wallOnMain = s.primary;
+  return {area: s.area, primary: s.primary, missing: !!want && !picked};
+}
 async function screenArea() {
   return osa(`ObjC.import('AppKit');const s=$.NSScreen.mainScreen,f=s.frame,v=s.visibleFrame;
     return JSON.stringify({x:v.origin.x,y:f.size.height-(v.origin.y+v.size.height),width:v.size.width,height:v.size.height});`, null, {chrome: false});
@@ -287,14 +322,14 @@ async function openWindow(url) {
 const setBounds = (id, r) => osa(`const w=chrome.windows.byId(arg.id);w.bounds={x:arg.r.x,y:arg.r.y,width:arg.r.width,height:arg.r.height};return 'true';`, {id, r});
 const setUrl = (id, url) => osa(`chrome.windows.byId(arg.id).activeTab.url=arg.url;return 'true';`, {id, url});
 const closeWindow = id => osa(`chrome.windows.byId(arg).close();return 'true';`, id);
-const raise = ids => ids.length ? osa(`for(const id of arg){try{chrome.windows.byId(id).index=1;}catch(e){}}chrome.activate();return 'true';`, ids) : Promise.resolve();
+const raise = ids => ids.length ? osa(`for(const id of arg.ids){try{chrome.windows.byId(id).index=1;}catch(e){}}if(arg.front)chrome.activate();return 'true';`, {ids, front: wallOnMain}) : Promise.resolve();
 // Re-stack only if something is out of order: the first id (the backdrop) must be
 // behind every other wall window. Returns true when it had to fix the order.
 const fixStacking = ids => osa(`const idx=id=>{try{return chrome.windows.byId(id).index()}catch(e){return null}};
-  const back=idx(arg[0]);if(back===null)return 'false';
-  const bad=arg.slice(1).some(id=>{const i=idx(id);return i!==null&&i>back});
+  const back=idx(arg.ids[0]);if(back===null)return 'false';
+  const bad=arg.ids.slice(1).some(id=>{const i=idx(id);return i!==null&&i>back});
   if(!bad)return 'false';
-  for(const id of arg){try{chrome.windows.byId(id).index=1;}catch(e){}}chrome.activate();return 'true';`, ids);
+  for(const id of arg.ids){try{chrome.windows.byId(id).index=1;}catch(e){}}if(arg.front)chrome.activate();return 'true';`, {ids, front: wallOnMain});
 let stackOrder = [];
 
 // Regular YouTube pages (not YouTube TV) on a wall screen show only the video: the
@@ -427,18 +462,22 @@ async function applyNow() {
   const warnings = [];
   if (process.platform !== 'darwin' || TESTING) { state.warnings = ['Window control only works on the Mac mini.']; await saveState(); return; }
   const clean = state.clean && state.mode !== 'off';
-  if (clean !== cleanApplied) {
+  let screen = await wallScreen();
+  if (screen.missing) warnings.push(`The TV screen you picked (${state.display.name}) isn't connected, so the wall is on the main screen.`);
+  const bars = clean && screen.primary; // the Dock and menu bar are only hidden for a wall on the main display
+  if (bars !== cleanApplied) {
     let errs;
-    try { errs = await setClean(clean); } catch (e) { errs = [e.message]; }
+    try { errs = await setClean(bars); } catch (e) { errs = [e.message]; }
     if (errs.length) {
-      warnings.push(errs.find(e => e.startsWith('Could not read')) || `Couldn't ${clean ? 'hide' : 'restore'} the Dock/menu bar: ${errs[0]}`);
+      warnings.push(errs.find(e => e.startsWith('Could not read')) || `Couldn't ${bars ? 'hide' : 'restore'} the Dock/menu bar: ${errs[0]}`);
       cleanApplied = null; // not applied: try again on the next change
     } else {
-      cleanApplied = clean;
+      cleanApplied = bars;
       await sleep(1200); // let macOS finish sliding the Dock/menu bar
+      screen = await wallScreen(); // the usable area changed
     }
   }
-  const area = await screenArea();
+  const area = screen.area;
   const live = new Set(await windowIds());
   // In clean mode the top row's title bars sit in a thin strip at the top of the
   // screen (macOS won't place windows above it), so lay the games out below that
@@ -471,7 +510,7 @@ async function applyNow() {
   // Streams that finish loading late can pop their window forward, and need the page
   // script (mutes, black frame, video-only YouTube); run both again shortly.
   for (const ms of [3000, 8000]) setTimeout(() => { lock = lock.then(applyAudio).then(keepStacking).catch(() => {}); }, ms);
-  if (clean) await parkPointer(area).catch(() => {});
+  if (bars) await parkPointer(area).catch(() => {});
   state.debug = {area, want: want.map(w => ({key: w.key, id: state.windows[w.key], rect: w.rect})),
     got: await osa(`return JSON.stringify(arg.map(id=>{try{const w=chrome.windows.byId(id);return {id,index:w.index(),b:w.bounds(),title:w.name(),url:w.activeTab.url()}}catch(e){return {id,err:String(e)}}}))`, order).catch(e => String(e))};
   // Where each wall window actually ended up (macOS may clamp what we asked for).
@@ -605,7 +644,7 @@ const validUrl = u => { try { const x = new URL(u); return ['http:', 'https:'].i
 
 // Build the complete next state from a change request without touching the live
 // state. Anything invalid throws, so a rejected request changes nothing.
-const PATCH_KEYS = new Set(['mode', 'layout', 'sidebar', 'clean', 'slots', 'audio', 'solo', 'calm']);
+const PATCH_KEYS = new Set(['mode', 'layout', 'sidebar', 'clean', 'display', 'slots', 'audio', 'solo', 'calm']);
 const MODES = ['off', 'grid', 'sportsboard', 'calm'];
 function buildCandidate(p, from = state) {
   if (!isObj(p)) bad('Expected a JSON object');
@@ -618,6 +657,12 @@ function buildCandidate(p, from = state) {
   }
   if (p.layout !== undefined) { if (typeof p.layout !== 'string' || !Object.hasOwn(LAYOUTS, p.layout)) bad('Bad layout'); next.layout = p.layout; }
   for (const k of ['sidebar', 'clean']) if (p[k] !== undefined) { if (typeof p[k] !== 'boolean') bad(`${k} must be true or false`); next[k] = p[k]; }
+  if (p.display !== undefined) {
+    const d = p.display;
+    if (d === null) next.display = null;
+    else if (!isObj(d) || !Number.isInteger(d.id) || d.id < 0 || d.id > 0xFFFFFFFF || typeof d.name !== 'string' || d.name.length > 80) bad('Bad screen choice');
+    else next.display = {id: d.id, name: d.name.trim()};
+  }
   if (p.slots !== undefined) {
     if (!Array.isArray(p.slots) || p.slots.length > MAX_SLOTS) bad(`Use up to ${MAX_SLOTS} screens`);
     const given = new Set(p.slots.map(s => s?.uid).filter(Boolean)), seen = new Set();
@@ -675,7 +720,8 @@ export async function handleWall(req, res, url, port) {
       if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
     }
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {state: publicState(), soundHelper: helperActive(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length});
+      send(res, 200, {state: publicState(), soundHelper: helperActive(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
+        displays: (await listDisplays(20000)).map(({id, name, primary, frame}) => ({id, name, primary, width: Math.round(frame.width), height: Math.round(frame.height)}))});
     } else if (p === '/api/wall/audio') {
       // Only the Sportsboard Sound extension counts as "the helper is running".
       if (req.headers['x-sportsboard-helper'] === '1' || /^chrome-extension:\/\//.test(req.headers.origin || '')) helperSeen = Date.now();
@@ -688,8 +734,9 @@ export async function handleWall(req, res, url, port) {
       const body = await readBody(req);
       await exclusive(async () => {
         const next = buildCandidate(body); // throws (and changes nothing) if invalid
+        const moved = JSON.stringify(next.display ?? null) !== JSON.stringify(state.display ?? null);
         state = next;
-        const calmOnly = state.mode === 'calm' && state.windows.calm && (state.clean && state.mode !== 'off') === cleanApplied;
+        const calmOnly = !moved && state.mode === 'calm' && state.windows.calm && (state.clean && state.mode !== 'off' && wallOnMain) === cleanApplied;
         if (calmOnly) await saveState();
         else await applyNow().catch(async e => { state.warnings = [`The TV couldn't be updated: ${e.message}`]; await saveState(); });
       });

@@ -46,6 +46,7 @@ Modes:
 - **Watch buttons**: every live or upcoming game on the scoreboard, and in the remote's **Games today** list, shows its network (📺 FS1). Tap it and pick a screen; the game's network is matched to your saved channels (Peacock, Prime, Apple TV and Paramount+ games open that app). The chosen screen gets the sound.
 - **Scoreboard**: the sportsbook-style board full screen, in TV mode (sized to fill the TV, paging on big slates).
 - **Calm**: Apple Aerials stored on the Mini plus YouTube scenes (captions off), grouped by category and rotating by time of day. Pin one scene or a whole category (⟳ Rotate all …), toggle the clock, sound or scene names, and add YouTube links from the remote (Edit reveals ✕ to remove scenes). A scene that can't be embedded is skipped automatically. Scenes and the schedule live in `wall-config.json` (`scenes[].category`, `schedule[].from/scenes`).
+- **TV screen**: on a Mac with more than one display, the remote's **TV screen** row picks which one gets the wall (remembered across restarts; the main display if that screen is unplugged). With the wall on a second screen, Clean screen leaves the Dock, menu bar and pointer alone and the wall never brings Chrome forward, so you can keep working on the main display.
 - **Clean screen**: auto-hides the Dock and menu bar, tucks window title bars out of view, blanks window titles and parks the pointer. Turning it off or choosing **Off** restores your Dock and menu bar settings.
 
 One-time setup on the Mini:
