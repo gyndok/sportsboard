@@ -491,6 +491,19 @@ function networksFor(title) {
   return [...out].filter(Boolean);
 }
 
+// A game that runs past its time slot: YouTube TV's page moves on to the next scheduled
+// program, so the matchup text vanishes or names the next game. Each screen keeps the game
+// it was showing while that game is still live and the channel hasn't changed; a different
+// game that is also live (a real channel change) still takes over.
+const screenGame = new Map(); // slot uid -> {league, id, channel}
+export function stickyGame(picked, memory, channel, events) {
+  const was = memory && (events[memory.league] || []).find(e => e.id === memory.id);
+  const keep = was && was.state === 'in' && memory.channel === channel;
+  if (!keep) return picked;
+  if (picked.found && picked.found.event.id !== was.id && (picked.found.event.state === 'in' || picked.via === 'picked')) return picked;
+  return {found: {league: memory.league, event: was}, via: picked.found?.event.id === was.id ? picked.via : 'kept'};
+}
+
 async function oddsTick() {
   if (oddsBusy || process.platform !== 'darwin' || TESTING) return;
   oddsBusy = true;
@@ -513,14 +526,18 @@ async function oddsTick() {
     await Promise.all(list.map(async (x, i) => {
       let r = null; try { r = JSON.parse(reports?.[i] || 'null'); } catch {}
       const screen = shown.findIndex(s => s.uid === x.uid) + 1;
-      const {found, via} = whichGame(r, slotGame.get(x.uid), events);
+      const picked = whichGame(r, slotGame.get(x.uid), events);
+      const {found, via} = stickyGame(picked, screenGame.get(x.uid), r?.title || '', events);
+      if (found) screenGame.set(x.uid, {league: found.league, id: found.event.id, channel: r?.title || ''});
+      else screenGame.delete(x.uid);
       const uid = x.uid;
-      if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
+      if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, hand: null, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
       const game = await liveGame(found.league, found.event).catch(() => null);
       const delay = config.odds.delay + (r?.behind > 3 ? r.behind : 0);
       const data = game && chartData(game, delay);
       if (data) oddsDraw.set(x.id, data); else oddsDraw.delete(x.id);
-      status.push({screen, uid, title: r?.title || '', via, game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
+      const hintNow = slotGame.get(x.uid);
+      status.push({screen, uid, hand: hintNow?.hand ? `${hintNow.league}:${hintNow.id}` : null, title: r?.title || '', via, game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
     }));
     for (const id of [...oddsDraw.keys()]) if (!list.some(x => x.id === id)) oddsDraw.delete(id);
     for (const id of [...oddsDrawn]) if (!list.some(x => x.id === id)) oddsDrawn.delete(id);

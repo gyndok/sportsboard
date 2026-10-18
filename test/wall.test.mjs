@@ -338,3 +338,24 @@ test('a game tied by hand beats what the page says', async () => {
   assert.equal(whichGame(report, {league: 'NFL', id: '1'}, events).found.event.id, '2', 'a 📺 pick yields to the page');
   assert.equal(whichGame(report, {league: 'NFL', id: '1', hand: true}, events).found.event.id, '1');
 });
+
+test('a game that runs past its time slot keeps its chart until the channel changes', async () => {
+  const {stickyGame} = await import('../wall.mjs');
+  const t = (n, s, a) => ({name: n, short: s, abbr: a});
+  const nyjNe = {id: '1', state: 'in', teams: [t('New York Jets', 'Jets', 'NYJ'), t('New England Patriots', 'Patriots', 'NE')]};
+  const bufLv = {id: '2', state: 'pre', teams: [t('Buffalo Bills', 'Bills', 'BUF'), t('Las Vegas Raiders', 'Raiders', 'LV')]};
+  const chiAtl = {id: '3', state: 'in', teams: [t('Chicago Bears', 'Bears', 'CHI'), t('Atlanta Falcons', 'Falcons', 'ATL')]};
+  const events = {NFL: [nyjNe, bufLv, chiAtl]};
+  const mem = {league: 'NFL', id: '1', channel: 'NFL ST - CBS'};
+  const none = {found: null, via: null};
+  // The page shows the next program (no matchup, or the next game's): stay on the live game.
+  assert.equal(stickyGame(none, mem, 'NFL ST - CBS', events).found.event.id, '1');
+  assert.equal(stickyGame(none, mem, 'NFL ST - CBS', events).via, 'kept');
+  assert.equal(stickyGame({found: {league: 'NFL', event: bufLv}, via: 'page'}, mem, 'NFL ST - CBS', events).found.event.id, '1');
+  // Another live game on the page, or a different channel: switch.
+  assert.equal(stickyGame({found: {league: 'NFL', event: chiAtl}, via: 'page'}, mem, 'NFL ST - CBS', events).found.event.id, '3');
+  assert.equal(stickyGame(none, mem, 'NFL RedZone', events).found, null);
+  // Once the game is over, nothing is held.
+  assert.equal(stickyGame(none, mem, 'NFL ST - CBS', {NFL: [{...nyjNe, state: 'post'}]}).found, null);
+  assert.equal(stickyGame(none, null, 'FOX 26', events).found, null);
+});
