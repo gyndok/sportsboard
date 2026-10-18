@@ -373,7 +373,7 @@ window.__wallYT.sync();}`;
 // Runs inside each stream page: mute/unmute its video and paint the window frame black
 // (Chrome tints an app window's title bar with the page's theme-color).
 export const PAGE_JS = `(()=>{const mute=__MUTED__;if(mute!==null)document.querySelectorAll('video,audio').forEach(m=>{m.muted=mute});
-if(__CLEAN__&&!window.__wallTitle){window.__wallTitle=1;const B='\\u2800';const blank=()=>{if(document.title!==B)document.title=B;};blank();
+if(__CLEAN__&&!window.__wallTitle){window.__wallTitle=1;const B='\\u2800';const blank=()=>{if(document.title!==B){window.__wallOrigTitle=document.title;document.title=B;}};blank();
 new MutationObserver(blank).observe(document.head,{childList:true,subtree:true,characterData:true});}
 let t=document.querySelector('meta[name=theme-color][data-wall]');
 document.querySelectorAll('meta[name=theme-color]:not([data-wall])').forEach(m=>m.remove());
@@ -422,10 +422,14 @@ return JSON.stringify(out)})()`;
 // with DOM calls, not innerHTML, because YouTube's pages only accept trusted HTML.
 export const ODDS_JS = `(()=>{const d=__DATA__;
 const md=navigator.mediaSession&&navigator.mediaSession.metadata;const title=md?String(md.title||''):'';
+const seen=new Set(),cands=[],add=s=>{s=String(s||'').replace(/\\s+/g,' ').trim();if(s&&s.length<=120&&!seen.has(s)){seen.add(s);cands.push(s)}};
+if(md){add(md.title);add(md.artist);add(md.album)}add(window.__wallOrigTitle);
+const mre=/\\s(?:at|vs\\.?|v\\.?|@)\\s/i;
+for(const e of document.querySelectorAll('[class*="title" i],[id*="title" i],[class*="metadata" i],[aria-label],h1,h2,h3')){if(cands.length>=14)break;const a=e.getAttribute('aria-label');const t=a&&!e.children.length?a:(e.children.length>8?'':e.textContent||'');if(t.length<=120&&mre.test(t))add(t)}
 const area=x=>{const r=x.getBoundingClientRect();return r.width*r.height};
 const v=[...document.querySelectorAll('video')].filter(x=>x.readyState>0||x.currentSrc).sort((a,b)=>area(b)-area(a))[0];
 let behind=null;if(v&&v.duration===Infinity&&v.seekable&&v.seekable.length)behind=Math.max(0,Math.round(v.seekable.end(v.seekable.length-1)-v.currentTime));
-const out=JSON.stringify({title,behind,paused:v?v.paused:null});
+const out=JSON.stringify({title,cands,behind,paused:v?v.paused:null});
 let box=document.getElementById('sb-odds');
 if(!d){if(box)box.remove();return out}
 const NS='http://www.w3.org/2000/svg',el=(n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
@@ -454,6 +458,39 @@ const slotGame = new Map(); // slot uid -> {league, id} sent from the scoreboard
 let oddsStatus = [], oddsBusy = false;
 const oddsDraw = new Map(); // window id -> chart data from the last tick
 const oddsDrawn = new Set(); // windows that may have a chart on them
+// Which game a stream is showing. YouTube TV names the channel ("FOX 26", "NFL ST - CBS")
+// rather than the game in its media title, so in order: any text on the page that reads like
+// a matchup ("Jets at Patriots"), the game picked from the scoreboard for that screen, then
+// the channel's network when exactly one game is live on it.
+export function whichGame(report, hint, events) {
+  const picked = () => { const e = hint && (events[hint.league] || []).find(ev => ev.id === hint.id); return e ? {found: {league: hint.league, event: e}, via: 'picked'} : null; };
+  if (hint?.hand) { const p = picked(); if (p) return p; } // tied by hand on the remote: always wins
+  for (const t of [report?.title, ...(Array.isArray(report?.cands) ? report.cands : [])]) {
+    if (typeof t !== 'string' || !t) continue;
+    const f = findEvent(t, events);
+    if (f) return {found: f, via: t === report?.title ? 'title' : 'page'};
+  }
+  const p = picked(); if (p) return p;
+  const nets = networksFor(report?.title);
+  if (nets.length) {
+    const live = Object.entries(events).flatMap(([league, list]) => (list || []).filter(e => e.state === 'in' && String(e.broadcast || '').split(/\s*[\/,|]\s*/).some(b => nets.includes(norm(b)))).map(event => ({league, event})));
+    if (live.length === 1) return {found: live[0], via: 'network'};
+  }
+  return {found: null, via: null};
+}
+// Networks a channel title stands for: a saved channel's name and aliases ("FOX 26" → FOX),
+// or the network after a dash ("NFL ST - CBS" → CBS).
+function networksFor(title) {
+  const t = String(title || '');
+  if (!t) return [];
+  const out = new Set([norm(t)]);
+  const ch = config.channels.find(c => [c.name, ...(c.aliases || [])].some(a => norm(a) === norm(t)));
+  if (ch) [ch.name, ...(ch.aliases || [])].forEach(a => out.add(norm(a)));
+  const dash = t.split(/\s+-\s+/);
+  if (dash.length > 1) out.add(norm(dash.at(-1)));
+  return [...out].filter(Boolean);
+}
+
 async function oddsTick() {
   if (oddsBusy || process.platform !== 'darwin' || TESTING) return;
   oddsBusy = true;
@@ -475,16 +512,15 @@ async function oddsTick() {
     const status = [];
     await Promise.all(list.map(async (x, i) => {
       let r = null; try { r = JSON.parse(reports?.[i] || 'null'); } catch {}
-      let found = r?.title ? findEvent(r.title, events) : null;
-      const hint = slotGame.get(x.uid);
-      if (!found && hint) { const e = (events[hint.league] || []).find(ev => ev.id === hint.id); if (e) found = {league: hint.league, event: e}; }
       const screen = shown.findIndex(s => s.uid === x.uid) + 1;
-      if (!found) { oddsDraw.delete(x.id); status.push({screen, title: r?.title || '', game: null}); return; }
+      const {found, via} = whichGame(r, slotGame.get(x.uid), events);
+      const uid = x.uid;
+      if (!found) { oddsDraw.delete(x.id); status.push({screen, uid: x.uid, title: r?.title || '', seen: (r?.cands || []).slice(0, 4), game: null}); return; }
       const game = await liveGame(found.league, found.event).catch(() => null);
       const delay = config.odds.delay + (r?.behind > 3 ? r.behind : 0);
       const data = game && chartData(game, delay);
       if (data) oddsDraw.set(x.id, data); else oddsDraw.delete(x.id);
-      status.push({screen, title: r?.title || '', game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
+      status.push({screen, uid, title: r?.title || '', via, game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
     }));
     for (const id of [...oddsDraw.keys()]) if (!list.some(x => x.id === id)) oddsDraw.delete(id);
     for (const id of [...oddsDrawn]) if (!list.some(x => x.id === id)) oddsDrawn.delete(id);
@@ -872,6 +908,13 @@ export async function handleWall(req, res, url, port) {
       if (b.on !== undefined) { if (typeof b.on !== 'boolean') return send(res, 400, {error: 'on must be true or false'}), true; next.on = b.on; }
       if (b.delay !== undefined) { if (!Number.isFinite(b.delay)) return send(res, 400, {error: 'Bad delay'}), true; next.delay = b.delay; }
       if (b.nudge !== undefined) { if (!Number.isFinite(b.nudge) || Math.abs(b.nudge) > 60) return send(res, 400, {error: 'Bad delay'}), true; next.delay += b.nudge; }
+      if (b.link !== undefined) { // tie a screen to a game by hand (null unties it)
+        if (!isObj(b.link) || typeof b.link.screen !== 'string' || !state.slots.some(sl => sl.uid === b.link.screen)) return send(res, 400, {error: 'Unknown screen'}), true;
+        const g = b.link.game;
+        if (g === null) slotGame.delete(b.link.screen);
+        else if (isObj(g) && Object.hasOwn(GAME_LEAGUES, g.league) && /^\d{1,15}$/.test(String(g.id || ''))) slotGame.set(b.link.screen, {league: g.league, id: String(g.id), hand: true});
+        else return send(res, 400, {error: 'Bad game'}), true;
+      }
       next.delay = Math.max(0, Math.min(120, Math.round(next.delay)));
       config.odds = next;
       await saveConfig();
