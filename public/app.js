@@ -10,6 +10,7 @@ const ID_BASE = {NFL: 101, NCAAF: 201, MLB: 901, NBA: 501, NHL: 51}; // house nu
 const NETWORKS = {'ESPN+': 'ESPN+', Peacock: 'PCOCK', 'Prime Video': 'PRIME', 'Amazon Prime Video': 'PRIME', 'NFL Network': 'NFLN', 'NFL Net': 'NFLN', 'Big Ten Network': 'BTN', 'SEC Network': 'SECN', 'SEC Network+': 'SECN+', 'ACC Network': 'ACCN', 'ACC Network Extra': 'ACCNX', 'CBS Sports Network': 'CBSSN', 'CBS Sports Net': 'CBSSN', 'NBA TV': 'NBATV', 'MLB Network': 'MLBN', 'MLB Net': 'MLBN', 'NHL Network': 'NHLN', 'NHL Net': 'NHLN', 'Apple TV': 'APPLE', 'Apple TV+': 'APPLE', 'Paramount+': 'PARA+', truTV: 'TRUTV', 'Fox Sports 1': 'FS1', 'Fox Sports 2': 'FS2', 'ESPN Unlimited': 'ESPN', 'YouTube TV': 'YTTV', YouTube: 'YT', Netflix: 'NFLX'};
 const MEASURE_PX = 20; // block heights are measured once at this size and scaled
 const COL_EM = 24.5;   // narrowest comfortable column, in em of the board's font size
+const MKT_EM = 4.4;    // extra width when the WIN% column is shown
 const TV_MAX_PX = 34, TV_MIN_PX = 17, PAGE_MS = 15000;
 
 const $ = s => document.querySelector(s);
@@ -17,6 +18,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '
 const kiosk = new URLSearchParams(location.search).has('tv'); // the TV wall opens /?tv=1
 let selected = 'ALL', filter = 'all', data = {}, generation = 0, controller, followToday = true;
 let page = 0, pageTimer = null, lastLayout = null;
+let market = {}; // league -> {espnId: {away, home, trend?, move?}} from Polymarket (/api/market)
+const hasMarket = () => Object.values(market).some(m => m && Object.keys(m).length);
 
 const favoriteKey = (league, team) => `${league}:${team.name}`;
 let favorites = new Set();
@@ -98,9 +101,28 @@ function sections() {
 }
 
 const dateLine = () => new Date($('#date').value + 'T12:00:00').toLocaleDateString([], {weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'}).toUpperCase();
-const COLS = '<div class="cols"><span>ID</span><span>TEAM</span><span>SCR</span><span>PS/TOT</span><span>ML</span><span>TV</span></div>';
-const headHtml = (s, cont) => `<div class="head${cont ? ' cont' : ''}"><h2>${esc(s.title)}${cont ? ' <small>CONT.</small>' : ''}</h2>${cont ? '' : `<p>${esc(dateLine())}</p>`}${COLS}</div>`;
+const COLS = () => `<div class="cols"><span>ID</span><span>TEAM</span><span>SCR</span><span>PS/TOT</span><span>ML</span>${hasMarket() ? '<span title="Chance to win, from Polymarket">WIN%</span>' : ''}<span>TV</span></div>`;
+const headHtml = (s, cont) => `<div class="head${cont ? ' cont' : ''}"><h2>${esc(s.title)}${cont ? ' <small>CONT.</small>' : ''}</h2>${cont ? '' : `<p>${esc(dateLine())}</p>`}${COLS()}</div>`;
 
+// Polymarket's chance to win for one side: whole percent, a trend line while the game is on
+// (fixed 0–100% scale, so a flat line near the top means a near-lock), and an arrow when the
+// price has moved 5 points or more lately.
+function winHtml(e, i) {
+  const m = market[e.league]?.[e.id];
+  if (!m || e.state === 'post') return '';
+  const p = i === 0 ? m.away : m.home;
+  if (!Number.isFinite(p)) return '';
+  const text = p < 0.005 ? '<1' : p > 0.995 ? '>99' : String(Math.round(p * 100));
+  let spark = '';
+  if (e.state === 'in' && Array.isArray(m.trend) && m.trend.length > 1) {
+    const vals = m.trend.map(v => i === 0 ? v : 1 - v), n = vals.length - 1;
+    const pts = vals.map((v, k) => `${(k / n * 40).toFixed(1)},${(1 + (1 - v) * 10).toFixed(1)}`).join(' ');
+    spark = `<svg class="spark" viewBox="0 0 40 12" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}"/></svg>`;
+  }
+  const move = Number.isFinite(m.move) ? (i === 0 ? m.move : -m.move) : 0;
+  const arrow = move >= 0.05 ? '<i class="up">▲</i>' : move <= -0.05 ? '<i class="down">▼</i>' : '';
+  return `${spark}${arrow}${text}`;
+}
 function gameHtml(e, shade, ids) {
   const odds = lines(e), tv = e.state !== 'post' ? network(e.broadcast) : '';
   const matchup = e.teams.map(t => t.abbr).join(' @ ');
@@ -110,7 +132,8 @@ function gameHtml(e, shade, ids) {
     return `<div class="row">${i === 0 ? `<button class="id game-open" aria-label="View ${esc(e.name)} game details">${id}</button>` : `<span class="id">${id}</span>`}`
       + `<span class="team"><button class="star" data-favorite="${esc(key)}" aria-pressed="${fav}" aria-label="${fav ? 'Unpin' : 'Pin'} ${esc(t.name)}" title="${fav ? 'Unpin favorite' : 'Pin team to top'}">${fav ? '★' : '☆'}</button>${t.rank ? `<small>${t.rank}</small>` : ''}${esc(t.short || t.name)}</span>`
       + `<span class="scr">${e.state === 'pre' ? '' : esc(t.score)}</span><span class="pt">${esc(odds[i].pt)}</span><span class="ml">${esc(odds[i].ml)}</span>`
-      + `<span class="tv">${i === 0 && tv ? `<button class="net" data-watch="${esc(e.broadcast)}" data-title="${esc(matchup)}" title="Watch ${esc(e.broadcast)} on the TV">${esc(tv)}</button>` : ''}</span></div>`;
+      + (hasMarket() ? `<span class="win">${winHtml(e, i)}</span>` : '')
+      + `<span class="tv">${i === 0 && tv ? `<button class="net" data-watch="${esc(e.broadcast)}" data-title="${esc(matchup)}" data-game-league="${esc(e.league)}" data-game-id="${esc(e.id)}" title="Watch ${esc(e.broadcast)} on the TV">${esc(tv)}</button>` : ''}</span></div>`;
   }).join('')}</article>`;
 }
 
@@ -184,14 +207,15 @@ function layout() {
     // Sizes follow the window, so a small Game day tile gets smaller type than the full TV.
     const height = board.clientHeight, most = Math.min(TV_MAX_PX, Math.max(12, height / 24)), least = Math.min(TV_MIN_PX, Math.max(10, height / 62));
     const usable = px => height * 0.985 - px * 0.5; // column padding + rounding slack
-    const fit = px => { perPage = Math.max(1, Math.floor(width / (COL_EM * px))); cols = pack(secs, px / MEASURE_PX, usable(px)); return cols.length <= perPage; };
+    const colEm = COL_EM + (hasMarket() ? MKT_EM : 0);
+    const fit = px => { perPage = Math.max(1, Math.floor(width / (colEm * px))); cols = pack(secs, px / MEASURE_PX, usable(px)); return cols.length <= perPage; };
     for (px = most; px > least && !fit(px); px -= 0.5);
     if (px <= least) { px = least; fit(px); }
   } else {
     // Balanced newspaper columns, but never shorter than about a screenful unless
     // everything fits in less.
     px = width < 520 ? 15 : width < 1100 ? 16 : 17;
-    perPage = Math.max(1, Math.floor(width / (COL_EM * px)));
+    perPage = Math.max(1, Math.floor(width / ((COL_EM + (hasMarket() ? MKT_EM : 0)) * px)));
     const scale = px / MEASURE_PX;
     const total = secs.reduce((n, s) => n + s.blocks.reduce((m, b) => m + b.h, 0), 0) * scale;
     const opening = Math.max(...secs.map(s => (s.blocks[0].h + (s.blocks[1]?.h || 0) + (s.blocks[2]?.h || 0)) * scale));
@@ -213,6 +237,7 @@ function draw() {
   // readable width and the board is only as wide as the columns it uses.
   const slots = tv ? (pages > 1 ? perPage : shown.length) : perPage;
   board.style.fontSize = px + 'px';
+  board.classList.toggle('mkt', hasMarket());
   board.style.setProperty('--slots', slots);
   board.style.setProperty('--used', tv && pages > 1 ? perPage : shown.length);
   const active = board.contains(document.activeElement) ? document.activeElement : null;
@@ -229,7 +254,7 @@ const render = () => layout();
 async function refresh(clear = false) {
   controller?.abort(); controller = new AbortController();
   const signal = controller.signal, run = ++generation;
-  if (clear) data = {};
+  if (clear) { data = {}; market = {}; }
   render(); $('#refresh').disabled = true; $('#summary').textContent = 'Updating scores…';
   await Promise.all(LEAGUES.map(async l => {
     try {
@@ -244,9 +269,30 @@ async function refresh(clear = false) {
   if (run !== generation) return;
   render();
   $('#refresh').disabled = false;
+  loadMarkets(run, signal);
   const failed = LEAGUES.filter(l => data[l]?.error), live = Object.values(data).flatMap(d => d.events || []).filter(e => e.state === 'in').length;
   $('#summary').textContent = failed.length ? `${failed.length} feed${failed.length === 1 ? '' : 's'} unavailable · retrying every 30s` : `${live} live · Updated ${new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', second: '2-digit'})}`;
   $('#note').textContent = failed.length ? `${failed.join(', ')} FEED${failed.length === 1 ? '' : 'S'} UNAVAILABLE` : '';
+}
+
+// Win chances arrive separately and never hold up the scores. A league whose market feed
+// fails keeps its last prices for a few minutes, then drops them rather than show stale odds.
+const marketAt = {};
+async function loadMarkets(run, signal) {
+  const day = $('#date').value.replaceAll('-', '');
+  let changed = false;
+  await Promise.all(LEAGUES.map(async l => {
+    try {
+      const r = await fetch(`/api/market?league=${l}&date=${day}`, {signal});
+      const d = await r.json();
+      if (!r.ok) throw Error(d.error);
+      if (run !== generation) return;
+      market[l] = d.markets || {}; marketAt[l] = Date.now(); changed = true;
+    } catch {
+      if (run === generation && market[l] && Date.now() - (marketAt[l] || 0) > 180000) { delete market[l]; changed = true; }
+    }
+  }));
+  if (changed && run === generation) render();
 }
 
 // ---------- controls ----------

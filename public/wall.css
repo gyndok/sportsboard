@@ -69,6 +69,8 @@ body.sidebar{background:#000;font-family:'Board','Roboto Condensed','Arial Narro
 .side .g.s0 .row{color:var(--g);text-shadow:0 0 .28em #46e65c55}
 .side .g.s1 .row{color:var(--w);text-shadow:0 0 .25em #ffffff3a}
 .side .row b{color:inherit;font-weight:700}
+.side .row .r{flex:none;overflow:visible}
+.side .row .pc{font-style:normal;font-weight:500;font-size:.68em;margin-right:.5em;opacity:.9}
 .side .g.pre .row b{font-size:.86em}
 .side .fav{color:var(--gold)}
 .side .empty{color:var(--dim);font-size:14px;padding:20px 0;text-transform:none;text-align:center}
@@ -94,6 +96,8 @@ body.sidebar{background:#000;font-family:'Board','Roboto Condensed','Arial Narro
 .pb button{min-height:58px;font-size:18px;padding:8px 4px;color:var(--white)}
 .pb .wide{grid-column:span 3;color:var(--red)}.pb .wide2{grid-column:span 2}
 .pb button:disabled{opacity:.4;cursor:default}
+.odds-delay output{text-transform:none;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--teal);border:1px solid #233a35;min-height:58px}
+#odds-screens p{margin:8px 0 0;font-size:12px;text-transform:none;color:var(--white)}#odds-screens p small{color:var(--muted)}
 #pb-target{color:var(--teal);font-size:11px;letter-spacing:0;margin-left:6px}
 .sound-bar button[aria-pressed=true]{background:#123a31;border-color:var(--teal);color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
 /* scores panel laid out wide (bottom band) instead of tall */

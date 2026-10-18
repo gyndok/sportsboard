@@ -30,6 +30,10 @@ Click a game row (or tab to its status button and press Enter) to open its detai
 
 Run `npm test` for rendering and endpoint validation tests.
 
+## Win chances (Polymarket)
+
+`poly.mjs` reads Polymarket US's public market listings (no key) and matches each game to ESPN's by team names and start time. `/api/market?league=NFL&date=YYYYMMDD` returns each matched game's chance to win per side (bid/ask midpoint), plus a trend line for games in progress; the board's **WIN%** column and the TV scores panel use it. It's a separate request from `/api/scores`, so scores never wait on or fail with the market feed. On the TV wall, each game window gets a live win-chance chart drawn into the page over Apple Events: Sportsboard reads the stream's media title (falling back to the game picked with 📺), finds the market, and shows prices delayed by a configurable number of seconds (default 20, plus however far the stream is behind live) so the chart moves with the broadcast. Chart on/off and delay are on the remote and saved in `wall-config.json` under `odds`.
+
 ## TV Wall (Mac mini on a TV)
 
 Turns a Mac mini connected to a TV into a multi-game wall, a full-screen scoreboard, or a calm ambient screen, all controlled from a phone.

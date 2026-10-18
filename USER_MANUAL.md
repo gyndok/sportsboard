@@ -197,6 +197,16 @@ The first time each service opens, you may need to click into its window with th
 
 A status line underneath shows where you are, such as "Playing · 0:45 behind live" or "Captions on". Captions switch directly on YouTube TV and YouTube. Some services keep captions in a menu; the remote tells you when that's the case, and you set them with the Mac's mouse instead.
 
+### Odds on screen
+
+Each game on the wall can show a live **win-chance chart** in its top-left corner: both teams' chances over the game, in team colors, with the current percentages at the end of the lines. The numbers come from Polymarket's prediction markets (public prices, no account needed).
+
+- **Which game:** Sportsboard reads the title the stream gives Chrome ("Bears at Falcons") and finds that game. If a stream doesn't give a title, the game you picked with a **📺** button is used. The remote lists what each screen matched, or why it didn't.
+- **Delay:** market prices move about 10–20 seconds before the TV shows the play, so the chart runs behind live. Set the delay with **−5 / −1 / +1 / +5** under **Odds on screen** (default 20 s). Wait for a big play: if the chart moves before you see it, add delay; if after, take some away. Pausing or rewinding a game adds to the delay automatically.
+- **Off:** untick **Win-chance chart on each game**.
+
+Only games with a Polymarket market get a chart. Most NFL, college football, NBA, NHL and MLB games have one; smaller games may not.
+
 ### Layouts and swapping
 
 **Layout** offers:
@@ -252,6 +262,7 @@ The board works like a casino sportsbook board. Each league gets a column; a bus
 | **SCR** | Score (blank before the game starts). |
 | **PS/TOT** | The **point spread** on the favorite's row (e.g. `-3½`) and the **total** (over/under) on the other team's row (e.g. `47½`). `PK` means a pick'em, no favorite. In baseball and hockey the spread is the run line or puck line (`-1½`). |
 | **ML** | **Moneyline** for each team: `-150` is the favorite, `+130` the underdog, `EV` even money. |
+| **WIN%** | Each team's **chance to win** from Polymarket's prediction market, when there is one. During a game a small line shows how it has moved since kickoff, and **▲ / ▼** marks a jump of 5 points or more in the last few minutes. |
 | **TV** | The network. Click it to put the game on a TV screen. |
 
 The lines over each group tell you a game's status:
@@ -260,7 +271,7 @@ The lines over each group tell you a game's status:
 - **Live:** the clock in amber, e.g. `● 3RD 8:12`.
 - **Finished:** `FINAL`, or `FINAL/OT` for overtime.
 
-Betting lines come from ESPN's feed when it has them; otherwise those spots are blank.
+Betting lines come from ESPN's feed when it has them; otherwise those spots are blank. The WIN% column appears when Polymarket has prices for any game on the board; the scores panel on the TV shows the same percentages.
 
 **On a computer**, at `http://localhost:8788`:
 
@@ -316,6 +327,7 @@ Your settings live in `wall-config.json` (channels, scenes, schedule) and `wall-
 | Window title bars are white | Chrome **Settings › Appearance › Mode › Dark**. |
 | A game says too many devices or streams | That service limits simultaneous streams on your account. Use a different service on one of the screens. |
 | Calm says no Aerials are downloaded | Download some in **System Settings › Wallpaper** (Aerial section). |
+| No WIN% column, or no odds chart on a game | Polymarket has no market for those games, or its prices are briefly unavailable (they come back on their own). On the remote, **Odds on screen** says what each screen matched. A screen showing a channel rather than one game (RedZone, a studio show) gets no chart. |
 | Scores are missing or say a feed is unavailable | ESPN's feed is down or slow. Sportsboard keeps the last scores and retries every 30 seconds. |
 | The TV goes to "no signal" | The Mac went to sleep. See [section 4](#4-one-time-mac-setup-for-the-tv), step 8. |
 | The games are on the wrong screen | Pick the right one under **TV screen** on the remote. If the remote says the screen you picked isn't connected, plug it in (or pick another); meanwhile the wall uses the main screen. |

@@ -282,3 +282,19 @@ test('the TV screen choice is validated, saved and survives a restart', () => wi
   assert.equal((await post({display: null})).status, 200);
   assert.equal((await get()).state.display, null);
 }));
+
+test('odds chart settings: validated, clamped and saved', () => withServer(async base => {
+  const post = body => fetch(`${base}/api/wall/odds`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const first = await (await fetch(`${base}/api/wall`)).json();
+  assert.equal(typeof first.odds.on, 'boolean'); assert.ok(Array.isArray(first.odds.screens));
+  let d = await (await post({delay: 20, on: true})).json();
+  assert.deepEqual([d.odds.on, d.odds.delay], [true, 20]);
+  d = await (await post({nudge: 5})).json(); assert.equal(d.odds.delay, 25);
+  d = await (await post({nudge: -60})).json(); assert.equal(d.odds.delay, 0, 'never below zero');
+  assert.equal((await post({on: 'yes'})).status, 400);
+  assert.equal((await post({nudge: 500})).status, 400);
+  assert.equal((await post({delay: 'soon'})).status, 400);
+  d = await (await post({on: false, delay: 20})).json(); assert.equal(d.odds.on, false);
+  assert.equal((await (await fetch(`${base}/api/wall`)).json()).odds.on, false, 'kept');
+  await post({on: true});
+}));

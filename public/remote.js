@@ -56,6 +56,7 @@ function render() {
   else if ($('#pb-status').textContent.startsWith('Pick a screen')) $('#pb-status').textContent = '';
   $('#sound-hint').hidden = !!wall.soundHelper || s.mode !== 'grid';
   $('#sound-hint').textContent = 'Sound switching is in basic mode. Install the Sportsboard Sound helper in Chrome on the Mini so only the chosen screen ever plays (see README).';
+  renderOdds();
   $('#clean').checked = s.clean !== false;
   // Which screen gets the wall (only offered when the Mac has more than one).
   const ds = wall.displays || [];
@@ -94,6 +95,31 @@ function render() {
   $('#clock').checked = s.calm.clock; $('#sound').checked = s.calm.sound; $('#names').checked = !!s.calm.names;
   if (wall.remoteUrls?.length) $('#phone').innerHTML = `Open on your phone: ${wall.remoteUrls.map(u => `<a href="${esc(u)}">${esc(u)}</a>`).join(' · ')}`;
 }
+// Odds chart: on/off, delay, and what each screen is showing.
+function renderOdds() {
+  const o = wall.odds;
+  $('#odds-wrap').hidden = !o || wall.state.mode !== 'grid';
+  if (!o) return;
+  $('#odds-on').checked = o.on;
+  $('#odds-delay-val').textContent = `${o.delay}s`;
+  document.querySelectorAll('#odds-delay button').forEach(b => { b.disabled = !o.on; });
+  const pc = p => p < 0.005 ? '<1' : p > 0.995 ? '>99' : Math.round(p * 100);
+  $('#odds-screens').innerHTML = o.on ? (o.screens || []).map(x => {
+    if (!x.game) return `<p>Screen ${x.screen} · <small>${x.title ? `no game found in “${esc(x.title)}”` : 'no game title from this stream yet — play it from the Games list to link it'}</small></p>`;
+    const [a, h] = x.game.split(' @ ');
+    const odds = x.chance ? `${esc(a)} ${pc(x.chance.away)}% · ${esc(h)} ${pc(x.chance.home)}%` : x.market ? 'waiting for prices' : 'no Polymarket market for this game';
+    return `<p>Screen ${x.screen} · ${esc(x.game)} <small>${odds}${x.behind > 3 ? ` · ${x.behind}s behind live` : ''}</small></p>`;
+  }).join('') : '';
+}
+async function setOdds(body) {
+  try {
+    const r = await fetch('/api/wall/odds', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json(); if (!r.ok) throw Error(d.error);
+    wall.odds = d.odds; renderOdds();
+  } catch (e) { $('#status').textContent = e.message || 'Failed'; }
+}
+$('#odds-on').addEventListener('change', e => setOdds({on: e.target.checked}));
+$('#odds-delay').addEventListener('click', e => { const b = e.target.closest('[data-nudge]'); if (b && !b.disabled) setOdds({nudge: Number(b.dataset.nudge)}); });
 function incr(a) { return a.split('/').map(Number).map(n => n + 1).join('/'); }
 
 const slotsCopy = () => wall.state.slots.map(s => ({...s}));
@@ -200,7 +226,7 @@ async function loadGames() {
     .filter(e => e.state !== 'post').sort((a, b) => (a.state === 'in' ? 0 : 1) - (b.state === 'in' ? 0 : 1) || Date.parse(a.date) - Date.parse(b.date));
   $('#games').innerHTML = all.length ? all.map(e => `<div class="game-row"><span class="gl">${e.state === 'in' ? '<b>LIVE</b>' : new Date(e.date).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})} · ${esc(e.league)}</span>
       <span class="gt">${esc(e.teams.map(t => t.abbr + (e.state === 'in' ? ' ' + t.score : '')).join(' @ '))}</span>
-      ${e.broadcast ? `<button class="watch-chip" data-watch="${esc(e.broadcast)}" data-title="${esc(e.teams.map(t => t.abbr).join(' @ '))}">📺 ${esc(e.broadcast)}</button>` : '<span class="hint">No TV listed</span>'}</div>`).join('')
+      ${e.broadcast ? `<button class="watch-chip" data-watch="${esc(e.broadcast)}" data-title="${esc(e.teams.map(t => t.abbr).join(' @ '))}" data-game-league="${esc(e.league)}" data-game-id="${esc(e.id)}">📺 ${esc(e.broadcast)}</button>` : '<span class="hint">No TV listed</span>'}</div>`).join('')
     : `<p class="hint">${esc(ScoreFeed.emptyText(feed, 'No more games today.'))}</p>`;
   if (!feed.complete) $('#games').insertAdjacentHTML('beforeend', `<p class="warn">${esc(ScoreFeed.note(feed))}</p>`);
 }

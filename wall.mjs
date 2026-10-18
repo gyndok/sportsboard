@@ -7,6 +7,7 @@ import {createReadStream} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
+import {findEvent, liveGame, chartData} from './poly.mjs';
 
 // Under `npm test` keep state in a temp dir and never touch real windows.
 const TESTING = !!process.env.NODE_TEST_CONTEXT;
@@ -30,6 +31,9 @@ export const defaultConfig = {
   sidebarWidth: 0.2,
   titlebar: 28, // points of window title bar tucked out of sight in clean mode
   rotateMinutes: 20,
+  // Live win-probability chart over each game (Polymarket). delay: seconds behind the market,
+  // since prices move 10–20 s before the broadcast shows the play.
+  odds: {on: true, delay: 20},
   scenes: [
     {id: 'aerial-ocean', name: 'Ocean & underwater', type: 'aerial', filter: 'underwater|ocean|sea'},
     {id: 'aerial-landscape', name: 'Landscapes', type: 'aerial', filter: 'landscape'},
@@ -189,11 +193,14 @@ function sanitizeConfig(saved) {
   c.schedule = keep(c.schedule, x => isObj(x) && /^\d{2}:\d{2}$/.test(x.from || '') && Array.isArray(x.scenes), 'schedule blocks') || structuredClone(defaultConfig.schedule);
   if (!(c.rotateMinutes >= 1 && c.rotateMinutes <= 1440)) c.rotateMinutes = defaultConfig.rotateMinutes;
   if (!(c.titlebar >= 0 && c.titlebar <= 80)) c.titlebar = defaultConfig.titlebar;
+  c.odds = {on: typeof c.odds?.on === 'boolean' ? c.odds.on : true, delay: Number.isFinite(c.odds?.delay) && c.odds.delay >= 0 && c.odds.delay <= 120 ? Math.round(c.odds.delay) : 20};
   return c;
 }
 
-export async function initWall({port}) {
+let todaysGames = async () => ({});
+export async function initWall({port, games}) {
   base = `http://127.0.0.1:${port}`;
+  if (games) todaysGames = games;
   const loadedConfig = await loadJson(CONFIG_FILE);
   if (loadedConfig) {
     config = sanitizeConfig(loadedConfig.value);
@@ -409,6 +416,82 @@ const r=range();out.live=isLive();out.paused=v.paused;out.behind=out.live?Math.m
 out.position=Math.round(v.currentTime);out.duration=isFinite(v.duration)?Math.round(v.duration):null;
 return JSON.stringify(out)})()`;
 
+// ---------- odds chart over each game ----------
+// Runs inside a stream page: reports what it's playing (the media title the page gives
+// Chrome, and how far behind live the video is) and draws or removes the chart. Built
+// with DOM calls, not innerHTML, because YouTube's pages only accept trusted HTML.
+export const ODDS_JS = `(()=>{const d=__DATA__;
+const md=navigator.mediaSession&&navigator.mediaSession.metadata;const title=md?String(md.title||''):'';
+const area=x=>{const r=x.getBoundingClientRect();return r.width*r.height};
+const v=[...document.querySelectorAll('video')].filter(x=>x.readyState>0||x.currentSrc).sort((a,b)=>area(b)-area(a))[0];
+let behind=null;if(v&&v.duration===Infinity&&v.seekable&&v.seekable.length)behind=Math.max(0,Math.round(v.seekable.end(v.seekable.length-1)-v.currentTime));
+const out=JSON.stringify({title,behind,paused:v?v.paused:null});
+let box=document.getElementById('sb-odds');
+if(!d){if(box)box.remove();return out}
+const NS='http://www.w3.org/2000/svg',el=(n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
+if(!box){box=document.createElement('div');box.id='sb-odds';box.style.cssText='position:fixed;left:1.6vw;top:2.4vh;width:clamp(220px,25vw,560px);z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .8s;filter:drop-shadow(0 2px 6px #000a)';document.documentElement.appendChild(box);requestAnimationFrame(()=>requestAnimationFrame(()=>{box.style.opacity='1'}))}
+const W=320,H=128,L=8,R=232,T=22,B=118,y=p=>B-(B-T)*p,x=f=>L+(R-L)*f;
+const svg=el('svg',{viewBox:'0 0 '+W+' '+H,width:'100%',style:'display:block;overflow:visible'});
+const g=el('linearGradient',{id:'sbog',x1:0,x2:1},el('defs',{},svg));el('stop',{offset:0,'stop-color':'#000','stop-opacity':.72},g);el('stop',{offset:1,'stop-color':'#000','stop-opacity':.38},g);
+el('rect',{x:0,y:0,width:W,height:H,rx:10,fill:'url(#sbog)'},svg);
+const t=el('text',{x:L,y:15,fill:'#cfd3d6','font-size':10.5,'font-weight':700,'letter-spacing':1.2,'font-family':'Helvetica Neue,Arial,sans-serif'},svg);t.textContent='WIN CHANCE'+(d.delay?'  ·  '+d.delay+'s delay':'');
+el('line',{x1:L,x2:R,y1:y(.5),y2:y(.5),stroke:'#ffffff',"stroke-opacity":.18,'stroke-dasharray':'3 4'},svg);
+const sides=[['away',p=>p],['home',p=>1-p]];
+for(const[k,f]of sides){const s=d[k];if(!d.pts.length)continue;
+ el('polyline',{points:d.pts.map(q=>x(q[0]).toFixed(1)+','+y(f(q[1])).toFixed(1)).join(' '),fill:'none',stroke:s.color,'stroke-width':2.4,'stroke-linejoin':'round','stroke-linecap':'round'},svg);
+ const last=d.pts[d.pts.length-1],cy=y(f(last[1]));el('circle',{cx:x(last[0]),cy,r:3.4,fill:s.color},svg)}
+const ya=y(d.away.p),yh=y(d.home.p),gap=26;let la=ya,lh=yh;if(Math.abs(la-lh)<gap){const m=(la+lh)/2,up=la<lh?-1:1;la=m+up*gap/2;lh=m-up*gap/2}
+for(const[k,yy]of[['away',la],['home',lh]]){const s=d[k],pc=s.p<.005?'<1':s.p>.995?'>99':String(Math.round(s.p*100));
+ const tx=el('text',{x:R+12,y:Math.max(T+8,Math.min(B+4,yy))+6,fill:s.color,'font-size':20,'font-weight':800,'font-family':'SF Pro Display,Helvetica Neue,Arial,sans-serif','font-variant-numeric':'tabular-nums'},svg);
+ const a=el('tspan',{'font-size':12,'font-weight':700,dx:0},tx);a.textContent=s.abbr+' ';const b=el('tspan',{},tx);b.textContent=pc+'%'}
+box.replaceChildren(svg);return out})()`;
+
+// Every few seconds in Game day: ask each stream what it's showing, find that game and its
+// market, and draw the chart with the delay applied. A stream that names no game (or one
+// without a market) gets no chart. The game picked from the scoreboard is the fallback
+// when a page doesn't say what it's playing.
+const slotGame = new Map(); // slot uid -> {league, id} sent from the scoreboard
+let oddsStatus = [], oddsBusy = false;
+const oddsDraw = new Map(); // window id -> chart data from the last tick
+const oddsDrawn = new Set(); // windows that may have a chart on them
+async function oddsTick() {
+  if (oddsBusy || process.platform !== 'darwin' || TESTING) return;
+  oddsBusy = true;
+  try {
+    const on = config.odds.on && state.mode === 'grid';
+    const shown = state.mode === 'grid' ? visibleSlots().filter(s => s.service !== 'sportsboard') : [];
+    const list = shown.map(s => ({uid: s.uid, id: state.windows[`slot:${s.uid}`]})).filter(x => x.id);
+    const run = items => osa(`return JSON.stringify(arg.map(it=>{try{return chrome.windows.byId(it.id).activeTab.execute({javascript:it.js})}catch(e){return null}}))`, items).catch(() => []);
+    if (!on) { // take any charts down once, then leave the pages alone
+      oddsDraw.clear(); oddsStatus = [];
+      if (oddsDrawn.size) { await run([...oddsDrawn].map(id => ({id, js: ODDS_JS.replace('__DATA__', 'null')}))); oddsDrawn.clear(); }
+      return;
+    }
+    if (!list.length) { oddsStatus = []; return; }
+    const payload = list.map(x => ({id: x.id, js: ODDS_JS.replace('__DATA__', JSON.stringify(oddsDraw.get(x.id) || null))}));
+    list.forEach(x => oddsDrawn.add(x.id));
+    const reports = await run(payload);
+    const events = await todaysGames().catch(() => ({}));
+    const status = [];
+    await Promise.all(list.map(async (x, i) => {
+      let r = null; try { r = JSON.parse(reports?.[i] || 'null'); } catch {}
+      let found = r?.title ? findEvent(r.title, events) : null;
+      const hint = slotGame.get(x.uid);
+      if (!found && hint) { const e = (events[hint.league] || []).find(ev => ev.id === hint.id); if (e) found = {league: hint.league, event: e}; }
+      const screen = shown.findIndex(s => s.uid === x.uid) + 1;
+      if (!found) { oddsDraw.delete(x.id); status.push({screen, title: r?.title || '', game: null}); return; }
+      const game = await liveGame(found.league, found.event).catch(() => null);
+      const delay = config.odds.delay + (r?.behind > 3 ? r.behind : 0);
+      const data = game && chartData(game, delay);
+      if (data) oddsDraw.set(x.id, data); else oddsDraw.delete(x.id);
+      status.push({screen, title: r?.title || '', game: found.event.teams.map(t => t.abbr).join(' @ '), league: found.league, chance: data ? {away: data.away.p, home: data.home.p} : null, behind: r?.behind ?? null, market: !!game});
+    }));
+    for (const id of [...oddsDraw.keys()]) if (!list.some(x => x.id === id)) oddsDraw.delete(id);
+    for (const id of [...oddsDrawn]) if (!list.some(x => x.id === id)) oddsDrawn.delete(id);
+    oddsStatus = status.sort((a, b) => a.screen - b.screen);
+  } finally { oddsBusy = false; }
+}
+
 async function setMutes(list) {
   if (!list.length) return [];
   return osa(`const errs=[];for(const it of arg.list){try{chrome.windows.byId(it.id).activeTab.execute({javascript:arg.js.replace('__MUTED__',String(it.muted)).replace('__CLEAN__',String(arg.clean))});}catch(e){errs.push(String(e))}}return JSON.stringify(errs);`, {list, js: PAGE_JS, clean: state.clean && state.mode !== 'off'});
@@ -551,7 +634,8 @@ async function keepStacking() {
 function scheduleMuteRefresh() {
   clearInterval(muteTimer);
   let tick = 0; // every 5s: check stacking; every 15s: also re-apply page mutes/titles
-  if (state.mode !== 'off') muteTimer = setInterval(() => { lock = lock.then(() => (++tick % 3 ? null : applyAudio())).then(keepStacking).catch(() => {}); }, 5000);
+  if (state.mode !== 'off') muteTimer = setInterval(() => { lock = lock.then(() => (++tick % 3 ? null : applyAudio())).then(keepStacking).catch(() => {}); oddsTick().catch(e => console.error(`Odds chart: ${e.message}`)); }, 5000);
+  else { oddsDraw.clear(); oddsDrawn.clear(); oddsStatus = []; }
 }
 
 // Every change to the wall (validate → commit → put it on screen → save) runs one at
@@ -629,6 +713,7 @@ function lanAddresses(port) {
 class BadRequest extends Error { constructor(m, status = 400) { super(m); this.status = status; } }
 const bad = (m, status) => { throw new BadRequest(m, status); };
 const MAX_SLOTS = 4;
+const GAME_LEAGUES = {NFL: 1, NCAAF: 1, MLB: 1, NBA: 1, NHL: 1};
 const privateIp = ip => /^(::1|127\.|::ffff:127\.|10\.|::ffff:10\.|192\.168\.|::ffff:192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::ffff:172\.(1[6-9]|2\d|3[01])\.|fe80:|fc|fd|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/i.test(ip || '');
 const publicState = () => { const {windows, windowUrls, windowOrigins, cleanPrev, ...rest} = state; return rest; };
 function send(res, code, body) { res.writeHead(code, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(body)); }
@@ -720,7 +805,7 @@ export async function handleWall(req, res, url, port) {
       if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
     }
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {state: publicState(), soundHelper: helperActive(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
+      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
         displays: (await listDisplays(20000)).map(({id, name, primary, frame}) => ({id, name, primary, width: Math.round(frame.width), height: Math.round(frame.height)}))});
     } else if (p === '/api/wall/audio') {
       // Only the Sportsboard Sound extension counts as "the helper is running".
@@ -734,6 +819,7 @@ export async function handleWall(req, res, url, port) {
       const body = await readBody(req);
       await exclusive(async () => {
         const next = buildCandidate(body); // throws (and changes nothing) if invalid
+        for (const sl of next.slots) { const was = state.slots.find(x => x.uid === sl.uid); if (!was || was.link !== sl.link || was.service !== sl.service) slotGame.delete(sl.uid); }
         const moved = JSON.stringify(next.display ?? null) !== JSON.stringify(state.display ?? null);
         state = next;
         const calmOnly = !moved && state.mode === 'calm' && state.windows.calm && (state.clean && state.mode !== 'off' && wallOnMain) === cleanApplied;
@@ -779,6 +865,19 @@ export async function handleWall(req, res, url, port) {
       }
       if (!isObj(d)) return send(res, 502, {error: 'That screen didn\'t respond.'}), true;
       send(res, d.ok ? 200 : 422, {...d, screen: shown.indexOf(slot) + 1});
+    } else if (p === '/api/wall/odds' && req.method === 'POST') {
+      // Chart on/off and its delay, from the remote.
+      const b = await readBody(req);
+      const next = {...config.odds};
+      if (b.on !== undefined) { if (typeof b.on !== 'boolean') return send(res, 400, {error: 'on must be true or false'}), true; next.on = b.on; }
+      if (b.delay !== undefined) { if (!Number.isFinite(b.delay)) return send(res, 400, {error: 'Bad delay'}), true; next.delay = b.delay; }
+      if (b.nudge !== undefined) { if (!Number.isFinite(b.nudge) || Math.abs(b.nudge) > 60) return send(res, 400, {error: 'Bad delay'}), true; next.delay += b.nudge; }
+      next.delay = Math.max(0, Math.min(120, Math.round(next.delay)));
+      config.odds = next;
+      await saveConfig();
+      if (!next.on) oddsDraw.clear();
+      oddsTick().catch(() => {});
+      send(res, 200, {odds: {...config.odds, screens: oddsStatus}});
     } else if (p === '/api/wall/watch' && req.method === 'POST') {
       const b = await readBody(req);
       const slotIndex = Number(b.slot);
@@ -795,6 +894,9 @@ export async function handleWall(req, res, url, port) {
         const next = buildCandidate({slots, layout, mode: 'grid'});
         const picked = next.slots[slotIndex].uid;
         next.audio = picked;
+        // Remember which game this was, for the odds chart (if the page doesn't say).
+        if (isObj(b.game) && Object.hasOwn(GAME_LEAGUES, b.game.league) && /^\d{1,15}$/.test(String(b.game.id || ''))) slotGame.set(picked, {league: b.game.league, id: String(b.game.id)});
+        else slotGame.delete(picked);
         if (next.solo && next.solo !== picked) next.solo = null;
         state = next;
         await applyNow().catch(async e => { state.warnings = [`The TV couldn't be updated: ${e.message}`]; await saveState(); });
