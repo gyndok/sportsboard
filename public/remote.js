@@ -94,6 +94,7 @@ function render() {
   $('#now-scene').textContent = wall.scene ? `Now showing: ${wall.scene.name}` : '';
   if (wall.aerialCount === 0) $('#now-scene').textContent += ' · No Apple Aerials downloaded yet (System Settings › Wallpaper › download a few).';
   $('#clock').checked = s.calm.clock; $('#sound').checked = s.calm.sound; $('#names').checked = !!s.calm.names;
+  renderSun();
   if (wall.remoteUrls?.length) $('#phone').innerHTML = `Open on your phone: ${wall.remoteUrls.map(u => `<a href="${esc(u)}">${esc(u)}</a>`).join(' · ')}`;
 }
 // Odds chart: on/off, delay, and what each screen is showing.
@@ -180,6 +181,37 @@ function renderTools() {
   $('#zoom-reset').disabled = wall.state.mode !== 'grid';
   $('#restart').hidden = wall.canRestart === false;
 }
+// ---------- Calm by sunrise and sunset ----------
+const clock12 = m => { const h = Math.floor(m / 60) % 24; return `${(h + 11) % 12 + 1}:${String(m % 60).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+const blockName = from => ({'06:00': 'Morning', '12:00': 'Afternoon', '18:00': 'Evening', '21:00': 'Night'})[from] || `From ${from}`;
+function renderSun() {
+  const c = wall.calmTimes;
+  $('#calm-sun').closest('label').hidden = $('#calm-times').hidden = $('#calm-place').hidden = !c;
+  if (!c) return;
+  $('#calm-sun').checked = c.on;
+  const today = c.blocks.map(b => `${blockName(b.from)} ${clock12(b.start)}`).join(' · ');
+  const where = !c.place ? '' : c.place.auto ? `${esc(c.place.name)}, from the Mac’s time zone (set your city below for exact times)` : esc(c.place.name);
+  $('#calm-times').innerHTML = !c.on ? `Clock times: ${today}`
+    : c.sunrise == null ? `${where ? where + '. ' : ''}No sunrise or sunset to go by, so clock times: ${today}`
+    : `${where}: sunrise ${clock12(c.sunrise)}, sunset ${clock12(c.sunset)}.<br>Today: ${today}`;
+  $('#calm-place').hidden = !c.on;
+}
+async function setSun(body, label) {
+  $('#status').textContent = label;
+  try {
+    const r = await fetch('/api/wall/sun', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw Error(d.error || 'That didn’t work.');
+    wall.calmTimes = d.calmTimes; wall.scene = d.scene; render();
+    return true;
+  } catch (e) { $('#status').textContent = e.message || 'Failed'; return false; }
+}
+$('#calm-sun').addEventListener('change', e => setSun({on: e.target.checked}, 'Updating Calm…'));
+$('#calm-place').addEventListener('submit', async e => {
+  e.preventDefault();
+  const q = e.target.place.value.trim(); if (!q) return;
+  if (await setSun({place: q}, 'Looking it up…')) e.target.reset();
+});
 function incr(a) { return a.split('/').map(Number).map(n => n + 1).join('/'); }
 
 const slotsCopy = () => wall.state.slots.map(s => ({...s}));

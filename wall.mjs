@@ -31,6 +31,8 @@ export const defaultConfig = {
   sidebarWidth: 0.2,
   titlebar: 28, // points of window title bar tucked out of sight in clean mode
   rotateMinutes: 20,
+  calmSun: true,
+  place: null, // {name, lat, lon} for sunrise/sunset; null = the main city of the Mac's time zone
   // Live win-probability chart over each game (Polymarket). delay: seconds behind the market,
   // since prices move 10–20 s before the broadcast shows the play.
   odds: {on: true, delay: 20, size: 'M', corners: {}}, // corners: screen uid -> tl | tr | bl | br | off
@@ -43,10 +45,12 @@ export const defaultConfig = {
     {id: 'fireplace', name: 'Fireplace', type: 'youtube', video: 'L_LUpnjgPso', category: 'Fireplace'}
   ],
   // Time-of-day rotation (24h, local time). Each block runs until the next one.
+  // Calm's rotation. A block with sun: starts at that day's sunrise or sunset instead of
+  // its clock time while calmSun is on (its clock time stays its name and fallback).
   schedule: [
-    {from: '06:00', scenes: ['aerial-ocean', 'aerial-landscape']},
+    {from: '06:00', sun: 'sunrise', scenes: ['aerial-ocean', 'aerial-landscape']},
     {from: '12:00', scenes: ['aerial-landscape', 'aerial-earth']},
-    {from: '18:00', scenes: ['aerial-city', 'fireplace']},
+    {from: '18:00', sun: 'sunset', scenes: ['aerial-city', 'fireplace']},
     {from: '21:00', scenes: ['fireplace']}
   ]
 };
@@ -194,6 +198,14 @@ function sanitizeConfig(saved) {
   c.channels = keep(c.channels, x => isObj(x) && typeof x.id === 'string' && typeof x.name === 'string' && validUrl(x.url), 'channels') || [];
   c.scenes = keep(c.scenes, x => isObj(x) && typeof x.id === 'string' && typeof x.name === 'string' && (x.type === 'aerial' || (x.type === 'youtube' && /^[\w-]{11}$/.test(x.video || ''))), 'scenes') || structuredClone(defaultConfig.scenes);
   c.schedule = keep(c.schedule, x => isObj(x) && /^\d{2}:\d{2}$/.test(x.from || '') && Array.isArray(x.scenes), 'schedule blocks') || structuredClone(defaultConfig.schedule);
+  // Blocks saved before sunrise/sunset existed: morning (06:00) and evening (18:00) follow the sun.
+  c.schedule = c.schedule.map(b => {
+    const sun = b.sun === 'sunrise' || b.sun === 'sunset' ? b.sun : b.sun === undefined ? {'06:00': 'sunrise', '18:00': 'sunset'}[b.from] : undefined;
+    const {sun: _, ...rest} = b;
+    return sun ? {...rest, sun} : rest;
+  });
+  c.calmSun = typeof c.calmSun === 'boolean' ? c.calmSun : true;
+  c.place = validPlace(c.place);
   if (!(c.rotateMinutes >= 1 && c.rotateMinutes <= 1440)) c.rotateMinutes = defaultConfig.rotateMinutes;
   if (!(c.titlebar >= 0 && c.titlebar <= 80)) c.titlebar = defaultConfig.titlebar;
   c.odds = {on: typeof c.odds?.on === 'boolean' ? c.odds.on : true, delay: Number.isFinite(c.odds?.delay) && c.odds.delay >= 0 && c.odds.delay <= 120 ? Math.round(c.odds.delay) : 20,
@@ -715,6 +727,72 @@ function exclusive(fn) {
 }
 const apply = () => exclusive(applyNow);
 
+// ---------- sunrise & sunset (Calm's morning and evening) ----------
+// Worked out here from latitude and longitude (the usual solar-position approximation,
+// within a few minutes), so it needs no weather service.
+const RAD = Math.PI / 180, DAY_MS = 86400000, J1970 = 2440588, J2000 = 2451545;
+export function sunTimes(date, lat, lon) {
+  const d = date.getTime() / DAY_MS - 0.5 + J1970 - J2000, lw = -lon * RAD, phi = lat * RAD;
+  const n = Math.round(d - 0.0009 - lw / (2 * Math.PI));
+  const ds = 0.0009 + lw / (2 * Math.PI) + n; // solar noon, approximately
+  const M = RAD * (357.5291 + 0.98560028 * ds);
+  const L = M + RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M)) + RAD * 102.9372 + Math.PI;
+  const dec = Math.asin(Math.sin(RAD * 23.4397) * Math.sin(L));
+  const noon = J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  const cosW = (Math.sin(-0.833 * RAD) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec));
+  if (!(cosW > -1 && cosW < 1)) return null; // midnight sun or polar night: no sunrise that day
+  const half = Math.acos(cosW) / (2 * Math.PI), at = j => new Date((j + 0.5 - J1970) * DAY_MS);
+  return {rise: at(noon - half), set: at(noon + half)};
+}
+function validPlace(p) {
+  if (!isObj(p) || typeof p.name !== 'string' || !Number.isFinite(p.lat) || !Number.isFinite(p.lon) || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) return null;
+  return {name: p.name.trim().slice(0, 60) || 'Here', lat: Math.round(p.lat * 1e4) / 1e4, lon: Math.round(p.lon * 1e4) / 1e4};
+}
+// Without a city set on the remote: the main city of the Mac's time zone, from the tz
+// database's zone.tab (macOS ships it). Close enough to set the rotation by.
+let zonePlace = null;
+const zoneReady = (async () => {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const row = (await readFile('/usr/share/zoneinfo/zone.tab', 'utf8')).split('\n').map(l => l.split('\t')).find(f => f[2] === tz);
+    const m = row && /^([+-])(\d\d)(\d\d)(\d\d)?([+-])(\d{3})(\d\d)(\d\d)?$/.exec(row[1]);
+    if (m) {
+      const deg = (sign, d, mi, se) => (sign === '-' ? -1 : 1) * (Number(d) + Number(mi) / 60 + Number(se || 0) / 3600);
+      zonePlace = validPlace({name: tz.split('/').pop().replace(/_/g, ' '), lat: deg(m[1], m[2], m[3], m[4]), lon: deg(m[5], m[6], m[7], m[8])});
+    }
+  } catch {}
+})();
+const placeNow = () => config.place ? {...config.place, auto: false} : zonePlace && {...zonePlace, auto: true};
+// Look up a city or ZIP (Open-Meteo's free geocoder, no key), or take "lat, lon" as typed.
+async function findPlace(q) {
+  const ll = /^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/.exec(q);
+  if (ll) return validPlace({name: `${Number(ll[1]).toFixed(2)}, ${Number(ll[2]).toFixed(2)}`, lat: Number(ll[1]), lon: Number(ll[2])});
+  const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=${encodeURIComponent(q)}`, {signal: AbortSignal.timeout(8000)});
+  if (!r.ok) throw Error(`lookup failed (${r.status})`);
+  const hit = (await r.json())?.results?.[0];
+  return hit ? validPlace({name: [...new Set([hit.name, hit.admin1 || hit.country].filter(Boolean))].join(', '), lat: hit.latitude, lon: hit.longitude}) : null;
+}
+
+// Each rotation block and the minute of the day it starts today. Morning and evening move
+// with sunrise and sunset, but always stay at least half an hour clear of their neighbors.
+function calmBlocks(now = new Date()) {
+  const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+  const blocks = [...(config.schedule || [])].map(b => ({...b, start: toMin(b.from)})).sort((a, b) => a.start - b.start);
+  const place = placeNow();
+  const noon = new Date(now); noon.setHours(12, 0, 0, 0);
+  const sun = config.calmSun && place && sunTimes(noon, place.lat, place.lon);
+  if (!sun) return {blocks, sun: null, place};
+  const local = d => d.getHours() * 60 + d.getMinutes();
+  const want = {sunrise: local(sun.rise), sunset: local(sun.set)};
+  blocks.forEach((b, i) => {
+    if (!b.sun) return;
+    const lo = i > 0 ? blocks[i - 1].start + 30 : 0, hi = i < blocks.length - 1 ? blocks[i + 1].start - 30 : 1439;
+    b.start = Math.max(lo, Math.min(hi, want[b.sun]));
+  });
+  return {blocks, sun: want, place};
+}
+const calmInfo = () => { const {blocks, sun, place} = calmBlocks(); return {on: config.calmSun, place, sunrise: sun?.sunrise ?? null, sunset: sun?.sunset ?? null, blocks: blocks.map(b => ({from: b.from, sun: b.sun || null, start: b.start}))}; };
+
 // ---------- calm scenes ----------
 export const sceneCategory = s => s.category || (s.type === 'aerial' ? 'Apple Aerials' : 'My scenes');
 
@@ -728,9 +806,8 @@ function sceneNow(now = new Date(), skip = new Set()) {
   else if (pin && scenes.some(s => s.id === pin)) pool = [pin];
   else {
     const mins = now.getHours() * 60 + now.getMinutes();
-    const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
-    const sorted = [...(config.schedule || [])].sort((a, b) => toMin(a.from) - toMin(b.from));
-    const block = sorted.filter(b => toMin(b.from) <= mins).pop() || sorted[sorted.length - 1];
+    const {blocks} = calmBlocks(now);
+    const block = blocks.filter(b => b.start <= mins).pop() || blocks[blocks.length - 1];
     pool = (block?.scenes || []).filter(id => scenes.some(s => s.id === id));
   }
   const playable = pool.filter(id => !skip.has(id));
@@ -877,6 +954,7 @@ export async function handleWall(req, res, url, port) {
   const p = url.pathname;
   if (!(p.startsWith('/api/wall') || p.startsWith('/aerial/'))) return false;
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  await zoneReady;
   try {
     const getOnly = p === '/api/wall/audio' || p === '/api/wall/calm' || p.startsWith('/aerial/');
     const allowed = p === '/api/wall' ? ['GET', 'POST'] : getOnly ? ['GET', 'HEAD'] : ['POST'];
@@ -889,7 +967,7 @@ export async function handleWall(req, res, url, port) {
       if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
     }
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
+      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, calmTimes: calmInfo(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
         displays: (await listDisplays(20000)).map(({id, name, primary, frame}) => ({id, name, primary, width: Math.round(frame.width), height: Math.round(frame.height)}))});
     } else if (p === '/api/wall/audio') {
       // Only the Sportsboard Sound extension counts as "the helper is running".
@@ -970,6 +1048,22 @@ export async function handleWall(req, res, url, port) {
       const update = await runUpdate();
       send(res, 200, {ok: true, update});
       setTimeout(async () => { await Promise.all([...writeChains.values()]).catch(() => {}); process.exit(0); }, 800);
+    } else if (p === '/api/wall/sun' && req.method === 'POST') {
+      // Calm by sunrise and sunset: on/off, and the city it's for (null: the time zone's).
+      const b = await readBody(req);
+      if (b.on !== undefined && typeof b.on !== 'boolean') return send(res, 400, {error: 'on must be true or false'}), true;
+      let place = config.place;
+      if (b.place === null) place = null;
+      else if (b.place !== undefined) {
+        const q = typeof b.place === 'string' ? b.place.trim() : '';
+        if (q.length < 2 || q.length > 80) return send(res, 400, {error: 'Type a city or ZIP code.'}), true;
+        try { place = await findPlace(q); } catch { return send(res, 502, {error: 'Couldn’t look that up right now. Try again, or type latitude, longitude.'}), true; }
+        if (!place) return send(res, 404, {error: `Couldn’t find “${q}”. Try a city name, a ZIP code, or latitude, longitude.`}), true;
+      }
+      if (b.on !== undefined) config.calmSun = b.on;
+      config.place = place;
+      await saveConfig();
+      send(res, 200, {calmTimes: calmInfo(), scene: sceneNow()});
     } else if (p === '/api/wall/odds' && req.method === 'POST') {
       // Chart on/off and its delay, from the remote.
       const b = await readBody(req);

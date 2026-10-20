@@ -39,7 +39,13 @@ Everything runs on your own Mac. There are no accounts or sign-ups, and nothing 
 
 ## 2. Quick start
 
-If you're comfortable with Terminal, this is the whole install. Details for each step follow in sections 3 and 4.
+**Easiest: let Claude do it.** If you have [Claude Code](https://claude.com/claude-code), open it on the Mac that's connected to the TV and say:
+
+> Install Sportsboard from github.com/gyndok/sportsboard on this Mac. I live in Houston.
+
+It checks for Node.js, downloads Sportsboard, starts it, sets your city for Calm, and walks you through the few clicks it can't do for you (the Chrome settings and the Sound helper). The repo's `CLAUDE.md` tells it how. Swap in your own city.
+
+**Or in Terminal:** if you're comfortable with Terminal, this is the whole install. Details for each step follow in sections 3 and 4.
 
 ```sh
 # 1. Install Node.js from https://nodejs.org (the LTS installer), then:
@@ -303,6 +309,8 @@ Calm plays scenery when you're not watching games:
 | On the remote | Does |
 |---|---|
 | **⟳ Auto by time of day** | Rotates by time of day, changing scene every 20 minutes. The default rotation is ocean and landscapes in the morning, landscapes and Earth in the afternoon, cities and fireplace in the evening, and fireplace at night. |
+| **Follow the sun** | On by default. Morning starts at sunrise and evening at sunset, so the city lights and fireplace come on when it actually gets dark, all year round. Afternoon still starts at noon and night at 9 PM. Turn it off for fixed times (6 AM, noon, 6 PM, 9 PM). The remote shows today's times underneath. |
+| **Your city or ZIP code** | Where sunrise and sunset are worked out for. Until you set it, Sportsboard uses the main city of your Mac's time zone (Chicago for Central time), which can be off by most of an hour. Type your city or ZIP code and tap **Set city**. |
 | **⟳ Rotate all …** | Rotates through one group. |
 | A scene's name | Pins that one scene. |
 | **Show clock / Show scene names / Sound** | Switches the clock, the scene's name in the corner, and the sound of YouTube scenes. |

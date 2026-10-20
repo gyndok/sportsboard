@@ -397,3 +397,50 @@ test('reset zoom needs Game day and an up-to-date Sound helper; restart only run
   assert.equal(typeof (await (await fetch(`${base}/api/wall`)).json()).started, 'number');
   await post('/api/wall', {mode: before});
 }));
+
+test('sunrise and sunset come out right, and polar days have none', async () => {
+  const {sunTimes} = await import('../wall.mjs');
+  const near = (d, iso) => assert.ok(Math.abs(d - Date.parse(iso)) < 4 * 60000, `${d.toISOString()} vs ${iso}`);
+  let t = sunTimes(new Date('2026-10-20T17:00:00Z'), 29.76, -95.37); // Houston: 7:26 AM and 6:45 PM CDT
+  near(t.rise, '2026-10-20T12:26:00Z'); near(t.set, '2026-10-20T23:45:00Z');
+  t = sunTimes(new Date('2026-12-21T01:00:00Z'), -33.87, 151.21); // Sydney, its summer: 5:41 AM and 8:05 PM AEDT
+  near(t.rise, '2026-12-20T18:41:00Z'); near(t.set, '2026-12-21T09:05:00Z');
+  assert.equal(sunTimes(new Date('2026-12-21T11:00:00Z'), 69.65, 18.96), null, 'polar night in Tromsø');
+  assert.equal(sunTimes(new Date('2026-06-21T11:00:00Z'), 69.65, 18.96), null, 'midnight sun');
+});
+
+test('Calm follows the sun: city, on/off, and a saved rotation from before is moved over', async () => {
+  const {initWall, sunTimes} = await import('../wall.mjs');
+  const cfg = path.join(os.tmpdir(), `wall-config-test-${process.pid}.json`);
+  await writeFile(cfg, JSON.stringify({place: {name: 'Nowhere', lat: 400, lon: 0}, calmSun: 'yes', schedule: [
+    {from: '06:00', scenes: ['aerial-ocean']}, {from: '12:00', scenes: ['aerial-earth']}, {from: '18:00', scenes: ['fireplace']}, {from: '21:00', scenes: ['fireplace']}]}));
+  await initWall({port: 0});
+  await withServer(async base => {
+    const post = body => fetch(`${base}/api/wall/sun`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    let c = (await (await fetch(`${base}/api/wall`)).json()).calmTimes;
+    assert.equal(c.on, true, 'a bad saved value falls back to on');
+    assert.deepEqual(c.blocks.map(b => b.sun), ['sunrise', null, 'sunset', null], 'old rotation: morning and evening now follow the sun');
+    assert.ok(!c.place || c.place.auto, 'a bad saved city is dropped for the time zone’s');
+    let d = await (await post({place: ' 29.76, -95.37 '})).json();
+    c = d.calmTimes;
+    assert.deepEqual([c.place.name, c.place.lat, c.place.lon, c.place.auto], ['29.76, -95.37', 29.76, -95.37, false]);
+    // Morning starts at sunrise and evening at sunset (local time), kept half an hour clear of the fixed blocks.
+    const noon = new Date(); noon.setHours(12, 0, 0, 0);
+    const sun = sunTimes(noon, 29.76, -95.37), local = x => x.getHours() * 60 + x.getMinutes();
+    assert.equal(c.sunrise, local(sun.rise)); assert.equal(c.sunset, local(sun.set));
+    const [morning, afternoon, evening, night] = c.blocks.map(b => b.start);
+    assert.equal(morning, Math.min(11 * 60 + 30, c.sunrise)); assert.equal(afternoon, 720);
+    assert.equal(evening, Math.max(750, Math.min(20 * 60 + 30, c.sunset))); assert.equal(night, 1260);
+    d = await (await post({on: false})).json();
+    assert.deepEqual(d.calmTimes.blocks.map(b => b.start), [360, 720, 1080, 1260], 'off: clock times');
+    assert.equal(d.calmTimes.place.name, '29.76, -95.37', 'the city is kept');
+    assert.ok(d.scene, 'a scene is still picked');
+    for (const bad of [{on: 'yes'}, {place: 'x'}, {place: 'y'.repeat(81)}, {place: 42}]) assert.equal((await post(bad)).status, 400, JSON.stringify(bad));
+    d = await (await post({on: true, place: null})).json();
+    assert.ok(!d.calmTimes.place || d.calmTimes.place.auto, 'back to the time zone’s city');
+    assert.equal((await fetch(`${base}/api/wall/sun`, {method: 'POST', headers: {Origin: 'http://evil.example'}})).status, 403);
+  });
+  const saved = JSON.parse(await (await import('node:fs/promises')).readFile(cfg, 'utf8'));
+  assert.deepEqual([saved.calmSun, saved.place], [true, null]);
+  assert.equal(saved.schedule[0].sun, 'sunrise', 'the moved-over rotation is saved');
+});
