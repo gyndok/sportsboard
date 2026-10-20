@@ -42,7 +42,7 @@ main{max-width:760px;margin:0 auto;padding:16px}
 .scene{display:flex}
 .scene .x{width:36px;padding:0;border-left:0}
 .now{color:var(--teal);font-size:12px;text-transform:none;line-height:1.5}
-.add{display:grid;gap:6px}
+.add{display:grid;gap:6px}.add.place{grid-template-columns:1fr auto!important}
 .rfoot{max-width:760px;margin:0 auto;padding:10px 16px 28px;color:var(--muted);font-size:11px;text-transform:none;line-height:1.6;word-break:break-all}
 body.busy main{opacity:.6;pointer-events:none}
 [hidden]{display:none!important}

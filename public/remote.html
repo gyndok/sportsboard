@@ -65,6 +65,10 @@
     <label class="switch"><input type="checkbox" id="clock"><span>Show clock</span></label>
     <label class="switch"><input type="checkbox" id="names"><span>Show scene names</span></label>
     <label class="switch"><input type="checkbox" id="sound"><span>Sound (YouTube scenes)</span></label>
+    <h2>Sunrise &amp; sunset</h2>
+    <label class="switch"><input type="checkbox" id="calm-sun"><span>Follow the sun <small>(morning scenes from sunrise, evening scenes from sunset)</small></span></label>
+    <p class="hint" id="calm-times"></p>
+    <form id="calm-place" class="add place"><input name="place" placeholder="Your city or ZIP code" maxlength="80" autocomplete="off" aria-label="Your city or ZIP code"><button>Set city</button></form>
     <h2>Add a scene</h2>
     <form id="add-scene" class="add">
       <input name="name" placeholder="Name (e.g. Monterey jellies)" maxlength="40" required>
