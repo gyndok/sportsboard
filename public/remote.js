@@ -91,7 +91,14 @@ function render() {
     Object.entries(groups).map(([name, list]) => `<details class="scene-group" ${name === openCat ? 'open' : ''}><summary>${esc(name)} <small>${list.length}</small>${pinned === 'cat:' + name ? ' <b>▶</b>' : ''}</summary>
       <div class="scenes"><button data-scene="cat:${esc(name)}" aria-pressed="${pinned === 'cat:' + name}">⟳ Rotate all ${esc(name)}</button>
       ${list.map(sc => `<span class="scene"><button data-scene="${esc(sc.id)}" aria-pressed="${pinned === sc.id}">${esc(sc.name)}</button>${editing && sc.type !== 'aerial' ? `<button class="x" data-remove="${esc(sc.id)}" aria-label="Remove ${esc(sc.name)}">✕</button>` : ''}</span>`).join('')}</div></details>`).join('');
-  $('#now-scene').textContent = wall.scene ? `Now showing: ${wall.scene.name}` : '';
+  $('#now-scene').textContent = wall.scene ? `Now showing: ${wall.scene.name.trim()}` : '';
+  // Videos the TV couldn't play: say why, instead of quietly showing something else.
+  const broken = wall.calmBroken || [], why = new Map(broken.map(b => [b.id, b]));
+  const pinnedBad = why.get(pinned), others = broken.filter(b => b.id !== pinned);
+  $('#calm-warn').hidden = !broken.length;
+  $('#calm-warn').innerHTML = (pinnedBad ? `“${esc(pinnedBad.name)}” won’t play on the TV: ${esc(pinnedBad.reason)}.${wall.scene ? ` Calm is showing ${esc(wall.scene.name.trim())} instead.` : ''}` : '')
+    + (others.length ? `${pinnedBad ? '<br>' : ''}Skipped because they won’t play: ${others.map(b => `${esc(b.name)} (${esc(b.reason)})`).join('; ')}.` : '');
+  document.querySelectorAll('#scenes [data-scene]').forEach(btn => { const b = why.get(btn.dataset.scene); if (b) { btn.textContent = '⚠ ' + btn.textContent; btn.title = `Won’t play: ${b.reason}`; } });
   if (wall.aerialCount === 0) $('#now-scene').textContent += ' · No Apple Aerials downloaded yet (System Settings › Wallpaper › download a few).';
   $('#clock').checked = s.calm.clock; $('#sound').checked = s.calm.sound; $('#names').checked = !!s.calm.names;
   renderSun();
@@ -292,7 +299,8 @@ $('#scenes').addEventListener('click', async e => {
     return load();
   }
   if (e.target.closest('.edit-scenes')) { document.body.classList.toggle('editing-scenes'); return render(); }
-  const b = e.target.closest('[data-scene]'); if (b) patch({calm: {pinned: b.dataset.scene || null}});
+  const b = e.target.closest('[data-scene]');
+  if (b) { await patch({calm: {pinned: b.dataset.scene || null}}); setTimeout(load, 12000); } // catch a video the TV can't play
 });
 $('#clock').addEventListener('change', e => patch({calm: {clock: e.target.checked}}));
 $('#sound').addEventListener('change', e => patch({calm: {sound: e.target.checked}}));
@@ -302,7 +310,10 @@ $('#add-scene').addEventListener('submit', async e => {
   const r = await fetch('/api/wall/scene', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: f.name.value, url: f.url.value, when: f.when.value})});
   const d = await r.json();
   if (!r.ok) { $('#status').textContent = d.error; return; }
-  f.reset(); load();
+  f.reset();
+  await load();
+  if (d.added) $('#status').textContent = d.added.playing ? `Playing “${d.added.name}” · it’s under My scenes` : `Added “${d.added.name}” under My scenes · tap it there to play it`;
+  if (d.added?.playing) setTimeout(load, 12000); // the TV reports within seconds if YouTube won't play it
 });
 
 document.addEventListener('click', async e => {

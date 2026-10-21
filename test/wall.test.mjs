@@ -66,7 +66,7 @@ test('calm rotates a pinned category and skips unplayable scenes', () => withSer
   assert.equal(next.category, 'My scenes');
   assert.notEqual(next.id, first.id);
   const none = (await (await fetch(`${base}/api/wall/calm?skip=yt-aaaaaaaaaaa,yt-bbbbbbbbbbb`)).json()).scene;
-  assert.equal(none.type, 'aerial', 'falls back to Aerials when a whole category is unplayable');
+  assert.ok(none && !['yt-aaaaaaaaaaa', 'yt-bbbbbbbbbbb'].includes(none.id), 'a pinned category with nothing playable falls back to the time-of-day rotation');
   assert.equal((await post('/api/wall', {calm: {pinned: 'cat:Nope'}})).status, 400);
   assert.equal((await (await fetch(`${base}/api/wall`)).json()).state.calm.pinned, 'cat:My scenes', 'a rejected change leaves the pin alone');
   await post('/api/wall', {calm: {pinned: null}});
@@ -443,4 +443,42 @@ test('Calm follows the sun: city, on/off, and a saved rotation from before is mo
   const saved = JSON.parse(await (await import('node:fs/promises')).readFile(cfg, 'utf8'));
   assert.deepEqual([saved.calmSun, saved.place], [true, null]);
   assert.equal(saved.schedule[0].sun, 'sunrise', 'the moved-over rotation is saved');
+});
+
+test('a Calm video the TV can’t play is reported, explained on the remote, and skipped', () => withServer(async base => {
+  const post = (path, body) => fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const get = async () => (await fetch(`${base}/api/wall`)).json();
+  assert.equal((await post('/api/wall/scene', {name: '  Forest Window ', url: 'https://www.youtube.com/watch?v=ccccccccccc'})).status, 200);
+  assert.equal((await get()).scenes.find(s => s.id === 'yt-ccccccccccc').name, 'Forest Window', 'names are trimmed');
+  await post('/api/wall', {calm: {pinned: 'yt-ccccccccccc'}});
+  assert.equal((await get()).scene.id, 'yt-ccccccccccc');
+  for (const bad of [{scene: 'yt-ccccccccccc', code: 'x'}, {scene: 'nope', code: 150}, {scene: 'aerial-all', code: 150}]) assert.equal((await post('/api/wall/calm/broken', bad)).status, 400, JSON.stringify(bad));
+  assert.equal((await fetch(`${base}/api/wall/calm/broken`, {method: 'POST', headers: {'Content-Type': 'application/json', Origin: 'http://evil.example'}, body: '{}'})).status, 403);
+  assert.equal((await post('/api/wall/calm/broken', {scene: 'yt-ccccccccccc', code: 150})).status, 200);
+  const d = await get();
+  assert.deepEqual(d.calmBroken.map(b => [b.id, b.name, b.code]), [['yt-ccccccccccc', 'Forest Window', 150]]);
+  assert.match(d.calmBroken[0].reason, /only lets it play on YouTube/);
+  assert.notEqual(d.scene?.id, 'yt-ccccccccccc', '"Now showing" is what the TV really shows');
+  assert.equal(d.state.calm.pinned, 'yt-ccccccccccc', 'the pin is kept');
+  assert.notEqual((await (await fetch(`${base}/api/wall/calm`)).json()).scene?.id, 'yt-ccccccccccc', 'the TV skips it too, even after a reload');
+  await post('/api/wall/scene', {name: 'Forest Window', url: 'https://youtu.be/ccccccccccc'});
+  assert.deepEqual((await get()).calmBroken, [], 'adding it again gives it another try');
+  const before = (await get()).state.mode;
+  await post('/api/wall', {mode: 'calm', calm: {pinned: null}});
+  const added = (await (await post('/api/wall/scene', {url: 'https://youtu.be/eeeeeeeeeee'})).json()).added;
+  assert.deepEqual(added, {id: 'yt-eeeeeeeeeee', name: 'My scene', playing: true}, 'added as "Pin only" while Calm is up: it plays right away');
+  assert.equal((await get()).state.calm.pinned, 'yt-eeeeeeeeeee');
+  await post('/api/wall', {mode: before, calm: {pinned: null}});
+  for (const id of ['yt-ccccccccccc', 'yt-eeeeeeeeeee']) await post('/api/wall/scene', {remove: id});
+}));
+
+test('videos are checked with YouTube before they become scenes', async () => {
+  const {checkVideo, brokenReason} = await import('../wall.mjs');
+  const answer = (status, body = {}) => async url => { assert.match(url, /^https:\/\/www\.youtube\.com\/oembed\?format=json&url=https%3A%2F%2Fwww\.youtube\.com%2Fwatch%3Fv%3Dddddddddddd$/); return new Response(JSON.stringify(body), {status}); };
+  assert.deepEqual(await checkVideo('ddddddddddd', answer(200, {title: 'Forest Window 4K'})), {ok: true, title: 'Forest Window 4K'});
+  assert.match((await checkVideo('ddddddddddd', answer(401))).error, /only lets it play on YouTube/);
+  assert.match((await checkVideo('ddddddddddd', answer(404))).error, /private, removed/);
+  assert.deepEqual(await checkVideo('ddddddddddd', answer(500)), {ok: true}, 'YouTube trouble doesn’t block adding');
+  assert.deepEqual(await checkVideo('ddddddddddd', async () => { throw Error('offline'); }), {ok: true});
+  assert.match(brokenReason(101), /only lets it play/); assert.match(brokenReason(100), /private/); assert.match(brokenReason(5), /couldn’t play/);
 });
