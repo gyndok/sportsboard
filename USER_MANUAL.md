@@ -314,10 +314,10 @@ Calm plays scenery when you're not watching games:
 | **⟳ Rotate all …** | Rotates through one group. |
 | A scene's name | Pins that one scene. |
 | **Show clock / Show scene names / Sound** | Switches the clock, the scene's name in the corner, and the sound of YouTube scenes. |
-| **Add a scene** | Paste any YouTube video or live link (a live beach cam, an aquarium, a fireplace). Give it a name, and choose whether it joins the morning, afternoon, evening or night rotation, or is only played when you pin it. |
+| **Add a scene** | Paste any YouTube video or live link (a live beach cam, an aquarium, a fireplace). Give it a name (or leave it blank to use the video's title), and choose whether it joins the morning, afternoon, evening or night rotation, or is **Pin only**. A Pin only scene added while Calm is on starts playing right away. Every added scene is listed under **My scenes**: tap it there to play it. |
 | **Edit** | Shows **✕** next to scenes you added, so you can remove them. |
 
-If a YouTube scene can't be played, Calm skips it and moves on.
+Some YouTube videos can't play in Calm: their owner only allows them on youtube.com itself, or they're private or removed. Sportsboard checks with YouTube when you add a video and tells you then. If one gets through and won't play on the TV, Calm shows something else and the remote says which video and why (the scene's button gets a ⚠). Pick a different video.
 
 ---
 
@@ -349,6 +349,7 @@ Your settings live in `wall-config.json` (channels, scenes, schedule) and `wall-
 | The TV goes to "no signal" | The Mac went to sleep. See [section 4](#4-one-time-mac-setup-for-the-tv), step 8. |
 | The games are on the wrong screen | Pick the right one under **TV screen** on the remote. If the remote says the screen you picked isn't connected, plug it in (or pick another); meanwhile the wall uses the main screen. |
 | A game looks zoomed in, or its odds chart is huge | Tap **⌘0 Reset zoom on the games** under **Fix-its**. If the remote says to update the Sound helper, click **⟳** on its card in `chrome://extensions` first. |
+| A video I added to Calm won't play | The remote says why under **Now showing**. Usually its owner only lets it play on YouTube itself; find another video of the same thing. |
 | The odds chart covers the score | Move it to another corner with **↖ ↗ ↙ ↘** under that screen in **Odds on screen**, or tap **✕** to hide it there. |
 | Something else | Look at `log.txt` in the `sportsboard` folder for error messages, then double-click `Restart Sportsboard.command`. |
 

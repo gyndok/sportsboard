@@ -796,21 +796,48 @@ const calmInfo = () => { const {blocks, sun, place} = calmBlocks(); return {on: 
 // ---------- calm scenes ----------
 export const sceneCategory = s => s.category || (s.type === 'aerial' ? 'Apple Aerials' : 'My scenes');
 
+// YouTube scenes the TV couldn't play (the player's error code), so the remote can say
+// why and "Now showing" tells the truth. Forgotten after two hours, like on the TV.
+const calmBroken = new Map(); // scene id -> {code, at}
+const BROKEN_FOR = 2 * 3600e3;
+function brokenIds() {
+  for (const [id, b] of calmBroken) if (Date.now() - b.at > BROKEN_FOR) calmBroken.delete(id);
+  return new Set(calmBroken.keys());
+}
+export const brokenReason = code => code === 101 || code === 150 ? 'its owner only lets it play on YouTube itself'
+  : code === 100 ? 'it’s private, removed or doesn’t exist' : code === 2 ? 'the link isn’t a valid video' : 'YouTube’s player couldn’t play it here';
+const brokenList = () => [...brokenIds()].map(id => ({id, name: config.scenes.find(s => s.id === id)?.name?.trim() || id, code: calmBroken.get(id).code, reason: brokenReason(calmBroken.get(id).code)}));
+// Ask YouTube before adding a scene. oEmbed answers 401 when the owner blocks playing the
+// video on other sites and 404 when it's private or gone; anything else (or no answer) lets
+// it through, and the TV still reports a scene that won't play.
+export async function checkVideo(video, get = fetch) {
+  try {
+    const r = await get(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${video}`)}`, {signal: AbortSignal.timeout(6000)});
+    if (r.status === 401 || r.status === 403) return {ok: false, error: 'That video’s owner only lets it play on YouTube itself, so Calm can’t show it. Try another video.'};
+    if (r.status === 404 || r.status === 400) return {ok: false, error: 'That video is private, removed or doesn’t exist.'};
+    if (r.ok) { const d = await r.json().catch(() => ({})); return {ok: true, title: typeof d.title === 'string' ? d.title : ''}; }
+  } catch {}
+  return {ok: true};
+}
+
 // Pick the scene to show now: a pinned scene, a pinned category ("cat:<name>"),
-// or the time-of-day schedule. Scenes the TV reported as unplayable are skipped.
-function sceneNow(now = new Date(), skip = new Set()) {
+// or the time-of-day schedule. Scenes the TV reported as unplayable are skipped; if
+// that leaves a pin with nothing to play, the time-of-day rotation stands in for it.
+function sceneNow(now = new Date(), skip = brokenIds()) {
   const scenes = config.scenes;
   const pin = state.calm.pinned;
   let pool;
-  if (pin?.startsWith('cat:')) pool = scenes.filter(s => sceneCategory(s) === pin.slice(4)).map(s => s.id);
-  else if (pin && scenes.some(s => s.id === pin)) pool = [pin];
-  else {
+  const rotation = () => {
     const mins = now.getHours() * 60 + now.getMinutes();
     const {blocks} = calmBlocks(now);
     const block = blocks.filter(b => b.start <= mins).pop() || blocks[blocks.length - 1];
-    pool = (block?.scenes || []).filter(id => scenes.some(s => s.id === id));
-  }
-  const playable = pool.filter(id => !skip.has(id));
+    return (block?.scenes || []).filter(id => scenes.some(s => s.id === id));
+  };
+  if (pin?.startsWith('cat:')) pool = scenes.filter(s => sceneCategory(s) === pin.slice(4)).map(s => s.id);
+  else if (pin && scenes.some(s => s.id === pin)) pool = [pin];
+  else pool = rotation();
+  let playable = pool.filter(id => !skip.has(id));
+  if (!playable.length && pin) playable = rotation().filter(id => !skip.has(id));
   if (!playable.length) return scenes.find(s => s.type === 'aerial' && !s.filter) || scenes.find(s => !skip.has(s.id)) || null;
   const slot = Math.floor(now.getTime() / 60000 / (config.rotateMinutes || 20));
   return scenes.find(s => s.id === playable[slot % playable.length]);
@@ -967,7 +994,7 @@ export async function handleWall(req, res, url, port) {
       if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
     }
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, calmTimes: calmInfo(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
+      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, calmTimes: calmInfo(), calmBroken: brokenList(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
         displays: (await listDisplays(20000)).map(({id, name, primary, frame}) => ({id, name, primary, width: Math.round(frame.width), height: Math.round(frame.height)}))});
     } else if (p === '/api/wall/audio') {
       // Only the Sportsboard Sound extension counts as "the helper is running".
@@ -1134,18 +1161,35 @@ export async function handleWall(req, res, url, port) {
       } else {
         const video = youtubeId(b.url);
         if (!video) return send(res, 400, {error: 'Paste a YouTube video or live-stream link.'}), true;
-        const name = String(b.name || 'My scene').slice(0, 40);
+        const check = TESTING ? {ok: true} : await checkVideo(video);
+        if (!check.ok) return send(res, 422, {error: check.error}), true;
+        const name = (String(b.name || '').trim() || check.title || 'My scene').slice(0, 40).trim();
         const id = `yt-${video}`;
+        calmBroken.delete(id); // added again: give it another try
         config.scenes = config.scenes.filter(s => s.id !== id).concat({id, name, type: 'youtube', video, category: 'My scenes'});
         if (b.when && config.schedule) {
           const block = config.schedule.find(x => x.from === b.when);
           if (block && !block.scenes.includes(id)) block.scenes.push(id);
         }
       }
+      let added = null;
+      if (!b.remove) {
+        added = config.scenes[config.scenes.length - 1];
+        // "Pin only" while Calm is up: play it now, which is what adding it was for.
+        if (!b.when && state.mode === 'calm') { state = {...state, calm: {...state.calm, pinned: added.id}}; await saveState(); }
+      }
       await saveConfig();
-      send(res, 200, {scenes: config.scenes});
+      send(res, 200, {scenes: config.scenes, added: added && {id: added.id, name: added.name, playing: state.calm.pinned === added.id}});
+    } else if (p === '/api/wall/calm/broken' && req.method === 'POST') {
+      // The Calm page reports a YouTube scene its player refused (error code from the player).
+      const b = await readBody(req);
+      const scene = config.scenes.find(s => s.id === b.scene && s.type === 'youtube');
+      if (!scene || !Number.isInteger(b.code) || b.code < 0 || b.code > 9999) return send(res, 400, {error: 'Bad report'}), true;
+      if (!calmBroken.has(scene.id)) console.error(`Calm: "${scene.name.trim()}" (${scene.video}) won't play: YouTube error ${b.code}`);
+      calmBroken.set(scene.id, {code: b.code, at: Date.now()});
+      send(res, 200, {ok: true});
     } else if (p === '/api/wall/calm') {
-      const skip = new Set(String(url.searchParams.get('skip') || '').split(',').filter(Boolean).slice(0, 300));
+      const skip = new Set([...String(url.searchParams.get('skip') || '').split(',').filter(Boolean).slice(0, 300), ...brokenIds()]);
       const scene = sceneNow(new Date(), skip);
       const out = {scene, clock: state.calm.clock, sound: state.calm.sound, names: state.calm.names, mode: state.mode};
       if (scene?.type === 'aerial' || url.searchParams.has('aerials')) {

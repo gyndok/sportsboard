@@ -109,7 +109,12 @@ async function showYouTube(scene, my) {
         if (my !== gen || e.data !== YT.PlayerState.PLAYING) return;
         noCaptions(e.target); setTimeout(() => { if (my === gen) noCaptions(e.target); }, 4000);
       },
-      onError: () => { if (my !== gen) return; broken.set(scene.id, Date.now()); sceneId = null; poll(); } // the server picks the next scene
+      onError: e => { // tell the server why (the remote says so), then let it pick the next scene
+        if (my !== gen) return;
+        broken.set(scene.id, Date.now());
+        fetch('/api/wall/calm/broken', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({scene: scene.id, code: Number(e?.data) || 0})}).catch(() => {});
+        sceneId = null; poll();
+      }
     }
   });
   ytPlayer = player;
