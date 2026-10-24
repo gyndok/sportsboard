@@ -349,6 +349,7 @@ Your settings live in `wall-config.json` (channels, scenes, schedule) and `wall-
 | The TV goes to "no signal" | The Mac went to sleep. See [section 4](#4-one-time-mac-setup-for-the-tv), step 8. |
 | The games are on the wrong screen | Pick the right one under **TV screen** on the remote. If the remote says the screen you picked isn't connected, plug it in (or pick another); meanwhile the wall uses the main screen. |
 | A game looks zoomed in, or its odds chart is huge | Tap **⌘0 Reset zoom on the games** under **Fix-its**. If the remote says to update the Sound helper, click **⟳** on its card in `chrome://extensions` first. |
+| A Calm scene doesn't start by itself | It should start within a few seconds of tapping it. If it sits paused, Sportsboard tries again and then plays it without sound, and the remote says why under **Now showing**. If the Calm window on the Mini is covered by another window, Chrome pauses it: bring the Calm window to the front. If it's playing without sound, click the TV picture once with the Mini's mouse; sound then works until Calm is closed. |
 | A video I added to Calm won't play | The remote says why under **Now showing**. Usually its owner only lets it play on YouTube itself; find another video of the same thing. |
 | The odds chart covers the score | Move it to another corner with **↖ ↗ ↙ ↘** under that screen in **Odds on screen**, or tap **✕** to hide it there. |
 | Something else | Look at `log.txt` in the `sportsboard` folder for error messages, then double-click `Restart Sportsboard.command`. |

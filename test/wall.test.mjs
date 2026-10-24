@@ -482,3 +482,21 @@ test('videos are checked with YouTube before they become scenes', async () => {
   assert.deepEqual(await checkVideo('ddddddddddd', async () => { throw Error('offline'); }), {ok: true});
   assert.match(brokenReason(101), /only lets it play/); assert.match(brokenReason(100), /private/); assert.match(brokenReason(5), /couldn’t play/);
 });
+
+test('a Calm video that sat paused is reported and explained', () => withServer(async base => {
+  const post = (path, body) => fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const get = async () => (await fetch(`${base}/api/wall`)).json();
+  await post('/api/wall/scene', {name: 'Bora Bora', url: 'https://youtu.be/fffffffffff'});
+  await post('/api/wall', {calm: {pinned: 'yt-fffffffffff'}});
+  for (const bad of [{scene: 'nope', state: 2}, {scene: 'yt-fffffffffff', state: 'x'}, {scene: 'yt-fffffffffff', state: 2, fixed: 'kicked'}, {scene: 'yt-fffffffffff', state: 2, hidden: 'yes'}]) {
+    assert.equal((await post('/api/wall/calm/stuck', bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await post('/api/wall/calm/stuck', {scene: 'yt-fffffffffff', state: 1, fixed: 'nudged', hidden: false})).status, 200);
+  assert.equal((await get()).calmStuck, null, 'one that started after a nudge needs no warning');
+  assert.equal((await post('/api/wall/calm/stuck', {scene: 'yt-fffffffffff', state: 1, fixed: 'muted', hidden: false})).status, 200);
+  assert.deepEqual((({id, name, fixed, hidden}) => ({id, name, fixed, hidden}))((await get()).calmStuck), {id: 'yt-fffffffffff', name: 'Bora Bora', fixed: 'muted', hidden: false});
+  assert.equal((await post('/api/wall/calm/stuck', {scene: 'yt-fffffffffff', state: 2, fixed: null, hidden: true})).status, 200);
+  assert.equal((await get()).calmStuck.hidden, true);
+  await post('/api/wall', {calm: {pinned: null}});
+  await post('/api/wall/scene', {remove: 'yt-fffffffffff'});
+}));

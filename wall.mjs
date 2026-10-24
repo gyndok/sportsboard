@@ -806,6 +806,9 @@ function brokenIds() {
 }
 export const brokenReason = code => code === 101 || code === 150 ? 'its owner only lets it play on YouTube itself'
   : code === 100 ? 'it’s private, removed or doesn’t exist' : code === 2 ? 'the link isn’t a valid video' : 'YouTube’s player couldn’t play it here';
+// The last YouTube scene that loaded but wouldn't start by itself (see calm.js).
+let calmStuck = null; // {id, name, state, fixed, hidden, at}
+const stuckNow = () => calmStuck && Date.now() - calmStuck.at < 30 * 60e3 && calmStuck.fixed !== 'nudged' ? calmStuck : null;
 const brokenList = () => [...brokenIds()].map(id => ({id, name: config.scenes.find(s => s.id === id)?.name?.trim() || id, code: calmBroken.get(id).code, reason: brokenReason(calmBroken.get(id).code)}));
 // Ask YouTube before adding a scene. oEmbed answers 401 when the owner blocks playing the
 // video on other sites and 404 when it's private or gone; anything else (or no answer) lets
@@ -994,7 +997,7 @@ export async function handleWall(req, res, url, port) {
       if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
     }
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, calmTimes: calmInfo(), calmBroken: brokenList(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
+      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, calmTimes: calmInfo(), calmBroken: brokenList(), calmStuck: stuckNow(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
         displays: (await listDisplays(20000)).map(({id, name, primary, frame}) => ({id, name, primary, width: Math.round(frame.width), height: Math.round(frame.height)}))});
     } else if (p === '/api/wall/audio') {
       // Only the Sportsboard Sound extension counts as "the helper is running".
@@ -1187,6 +1190,15 @@ export async function handleWall(req, res, url, port) {
       if (!scene || !Number.isInteger(b.code) || b.code < 0 || b.code > 9999) return send(res, 400, {error: 'Bad report'}), true;
       if (!calmBroken.has(scene.id)) console.error(`Calm: "${scene.name.trim()}" (${scene.video}) won't play: YouTube error ${b.code}`);
       calmBroken.set(scene.id, {code: b.code, at: Date.now()});
+      send(res, 200, {ok: true});
+    } else if (p === '/api/wall/calm/stuck' && req.method === 'POST') {
+      // The Calm page reports a video that sat paused: whether a nudge or muting got it going,
+      // and whether its window was covered (Chrome pauses video it can't see).
+      const b = await readBody(req);
+      const scene = config.scenes.find(s => s.id === b.scene && s.type === 'youtube');
+      if (!scene || !Number.isInteger(b.state) || b.state < -2 || b.state > 9 || ![null, 'nudged', 'muted'].includes(b.fixed ?? null) || typeof (b.hidden ?? false) !== 'boolean') return send(res, 400, {error: 'Bad report'}), true;
+      calmStuck = {id: scene.id, name: scene.name.trim(), state: b.state, fixed: b.fixed ?? null, hidden: !!b.hidden, at: Date.now()};
+      console.error(`Calm: "${calmStuck.name}" sat paused (player state ${b.state}${b.hidden ? ', window covered' : ''}); ${b.fixed === 'nudged' ? 'started after a nudge' : b.fixed === 'muted' ? 'playing muted' : 'still not playing'}`);
       send(res, 200, {ok: true});
     } else if (p === '/api/wall/calm') {
       const skip = new Set([...String(url.searchParams.get('skip') || '').split(',').filter(Boolean).slice(0, 300), ...brokenIds()]);
