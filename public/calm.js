@@ -88,6 +88,41 @@ function noCaptions(p) {
   for (const m of ['captions', 'cc']) { try { p.unloadModule(m); } catch {} }
   try { p.setOption('captions', 'track', {}); } catch {}
 }
+// A video that loads but sits paused: nudge it, then fall back to playing it muted
+// (Chrome can hold back a video with sound until someone clicks the TV), and tell the
+// server what happened so the remote can say so. Buffering just gets more time.
+function makeSureItPlays(p, scene, my) {
+  let tries = 0, waited = 0;
+  const check = () => {
+    if (my !== gen) return;
+    let st = null; try { st = p.getPlayerState(); } catch {}
+    if (st === YT.PlayerState.PLAYING) {
+      if (tries) report(scene, {state: st, fixed: tries === 1 ? 'nudged' : 'muted'});
+      return;
+    }
+    if (st === YT.PlayerState.BUFFERING && waited++ < 6) return setTimeout(check, 2500);
+    tries++;
+    if (tries === 1) { try { p.playVideo(); } catch {} }
+    else if (tries === 2) { try { p.mute(); p.playVideo(); } catch {} }
+    else return report(scene, {state: st, fixed: null});
+    setTimeout(check, 3000);
+  };
+  setTimeout(check, 4000);
+}
+function report(scene, d) {
+  fetch('/api/wall/calm/stuck', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({scene: scene.id, state: d.state ?? -2, fixed: d.fixed, hidden: document.hidden})}).catch(() => {});
+}
+// Chrome pauses video in a window it can't see (covered by another window). Start again
+// as soon as the Calm window is visible.
+// A click on the TV (the mouse on the Mini) lets Chrome play sound from then on.
+document.addEventListener('pointerdown', () => {
+  try { if (ytPlayer && sound) { ytPlayer.unMute(); ytPlayer.playVideo(); makeSureItPlays(ytPlayer, {id: sceneId}, gen); } } catch {}
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !ytPlayer) return;
+  try { const st = ytPlayer.getPlayerState(); if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.BUFFERING) ytPlayer.playVideo(); } catch {}
+});
 async function showYouTube(scene, my) {
   try { await loadYT(); }
   catch {
@@ -104,7 +139,7 @@ async function showYouTube(scene, my) {
     videoId: scene.video,
     playerVars: {autoplay: 1, mute: 1, controls: 0, loop: 1, playlist: scene.video, rel: 0, playsinline: 1, iv_load_policy: 3, disablekb: 1, cc_load_policy: 0},
     events: {
-      onReady: e => { if (my !== gen) return; noCaptions(e.target); e.target.playVideo(); if (sound) e.target.unMute(); },
+      onReady: e => { if (my !== gen) return; noCaptions(e.target); e.target.playVideo(); if (sound) e.target.unMute(); makeSureItPlays(e.target, scene, my); },
       onStateChange: e => {
         if (my !== gen || e.data !== YT.PlayerState.PLAYING) return;
         noCaptions(e.target); setTimeout(() => { if (my === gen) noCaptions(e.target); }, 4000);
@@ -152,9 +187,12 @@ async function poll() {
     const d = await r.json();
     $('#clock').hidden = !d.clock;
     if (!!d.names !== names) { names = !!d.names; if (!names) $('#label').classList.remove('show'); }
-    if (d.sound !== sound) { sound = d.sound; try { if (ytPlayer) sound ? ytPlayer.unMute() : ytPlayer.mute(); } catch {} }
+    if (d.sound !== sound) {
+      sound = d.sound;
+      try { if (ytPlayer) { sound ? ytPlayer.unMute() : ytPlayer.mute(); if (sound) makeSureItPlays(ytPlayer, d.scene || {}, gen); } } catch {}
+    }
     const id = d.scene?.id || null;
     if (id !== sceneId) { sceneId = id; await show(d); }
   } catch {} finally { polling = false; }
 }
-poll(); setInterval(poll, 8000);
+poll(); setInterval(poll, 3000); // a scene picked on the remote shows up within a few seconds

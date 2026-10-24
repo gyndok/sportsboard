@@ -95,8 +95,13 @@ function render() {
   // Videos the TV couldn't play: say why, instead of quietly showing something else.
   const broken = wall.calmBroken || [], why = new Map(broken.map(b => [b.id, b]));
   const pinnedBad = why.get(pinned), others = broken.filter(b => b.id !== pinned);
-  $('#calm-warn').hidden = !broken.length;
-  $('#calm-warn').innerHTML = (pinnedBad ? `“${esc(pinnedBad.name)}” won’t play on the TV: ${esc(pinnedBad.reason)}.${wall.scene ? ` Calm is showing ${esc(wall.scene.name.trim())} instead.` : ''}` : '')
+  // A video that loaded but sat paused on the TV, if it's the one showing now.
+  const stuck = wall.calmStuck && wall.scene && wall.calmStuck.id === wall.scene.id ? wall.calmStuck : null;
+  const stuckText = !stuck ? '' : stuck.hidden ? `“${esc(stuck.name)}” is paused because the Calm window on the Mini is covered by another window, and Chrome pauses videos it can’t see. Bring the Calm window to the front.`
+    : stuck.fixed === 'muted' ? `“${esc(stuck.name)}” is playing without sound: Chrome held the sound back. Click the TV picture once with the Mini’s mouse to let it play sound.`
+    : `“${esc(stuck.name)}” didn’t start playing on the TV. Click the TV picture once with the Mini’s mouse.`;
+  $('#calm-warn').hidden = !broken.length && !stuckText;
+  $('#calm-warn').innerHTML = (stuckText ? stuckText + (broken.length ? '<br>' : '') : '') + (pinnedBad ? `“${esc(pinnedBad.name)}” won’t play on the TV: ${esc(pinnedBad.reason)}.${wall.scene ? ` Calm is showing ${esc(wall.scene.name.trim())} instead.` : ''}` : '')
     + (others.length ? `${pinnedBad ? '<br>' : ''}Skipped because they won’t play: ${others.map(b => `${esc(b.name)} (${esc(b.reason)})`).join('; ')}.` : '');
   document.querySelectorAll('#scenes [data-scene]').forEach(btn => { const b = why.get(btn.dataset.scene); if (b) { btn.textContent = '⚠ ' + btn.textContent; btn.title = `Won’t play: ${b.reason}`; } });
   if (wall.aerialCount === 0) $('#now-scene').textContent += ' · No Apple Aerials downloaded yet (System Settings › Wallpaper › download a few).';
