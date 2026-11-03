@@ -163,6 +163,7 @@ At the top of the remote:
 | **Scoreboard** | Shows the sportsbook board full screen. |
 | **Calm** | Shows relaxing scenery. |
 | **Off** | Closes the TV windows and gives you your normal desktop back. |
+| **🗳 Election** | Election night only (through Nov 4, 2026): shows the 2026 Midterm Tracker's Election night tab full screen instead of the scores. It's sized for the TV, scrolls slowly from top to bottom, and reloads every 5 minutes to pick up new results (the tracker itself updates its results hourly from 6 PM CT). Switch back and forth from the Scoreboard panel. In Game day, any screen can show it too: pick **Election results** in that screen's menu. The button disappears after the election. |
 | **Clean screen** | Hides the Dock, menu bar and window title bars, and moves the mouse pointer to the edge of the screen. Turning it off, or choosing **Off**, puts your Dock and menu bar back the way they were. |
 | **TV screen** | Only shown when the Mac has more than one screen. Tap the one that should show the wall. When the wall is on a second screen, you can keep working on the main one: Clean screen leaves your Dock, menu bar and mouse alone there, and the wall doesn't pull Chrome in front of what you're doing. |
 

@@ -66,6 +66,10 @@ One-time setup on the Mini:
 
 Window control uses `osascript` (JavaScript for Automation) and works only on macOS. Wall changes are accepted only from private-network addresses with a same-origin request. Runtime files `wall-state.json`, `wall-config.json` (your added scenes and schedule) and `log.txt` are not committed. Streaming services limit simultaneous streams per account, so several games from one service at once can hit that limit.
 
+## Election night
+
+Through `election.until` in `wall-config.json` (default: the 2026 midterm tracker, through 2026-11-04), the remote offers an **Election** mode: the scoreboard's TV window switches to `election.url` (same window, so toggling is quick), and Game day screens can pick it as a service. `ELECTION_JS` lays the page out 1280 px wide with CSS zoom to fill the window, hides the scrollbar and scrolls it slowly top to bottom; the server reloads it every 5 minutes since the page only loads its data on open. After the `until` day the mode is refused and the service falls back to the scoreboard.
+
 ## Reliability notes
 
 - **Bad requests can't stop the server.** Every request runs inside one error boundary. Malformed JSON, a `null` or invalid Origin, oversized bodies and unsupported methods get 400/403/405/413 answers instead of crashing it.

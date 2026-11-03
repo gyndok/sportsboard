@@ -6,7 +6,7 @@
 <header class="rhead"><a href="/" class="back">← Board</a><h1>TV WALL</h1><span id="status" role="status">Connecting…</span></header>
 <main>
   <nav class="modes" id="modes" aria-label="TV mode">
-    <button data-mode="grid">Game day</button><button data-mode="sportsboard">Scoreboard</button><button data-mode="calm">Calm</button><button data-mode="off">Off</button>
+    <button data-mode="grid">Game day</button><button data-mode="sportsboard">Scoreboard</button><button data-mode="election" hidden>🗳 Election</button><button data-mode="calm">Calm</button><button data-mode="off">Off</button>
   </nav>
   <label class="switch top-switch"><input type="checkbox" id="clean"><span>Clean screen <small>(hide Dock, menu bar &amp; title bars)</small></span></label>
   <div id="screen-wrap" hidden>
@@ -79,7 +79,11 @@
     </form>
   </section>
 
-  <section id="sb-panel" class="panel"><p class="hint">Sportsboard is full screen on the TV.</p></section>
+  <section id="sb-panel" class="panel"><p class="hint">Sportsboard is full screen on the TV.</p>
+    <button class="big-toggle" data-mode="election" hidden>🗳 Switch to election results</button></section>
+  <section id="election-panel" class="panel">
+    <button class="big-toggle" data-mode="sportsboard">🏟 Back to the scoreboard</button>
+    <p class="hint" id="election-hint"></p></section>
   <section id="off-panel" class="panel"><p class="hint">Wall windows are closed. Pick a mode to start.</p></section>
 
   <section id="tools">
