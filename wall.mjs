@@ -32,6 +32,9 @@ export const defaultConfig = {
   titlebar: 28, // points of window title bar tucked out of sight in clean mode
   rotateMinutes: 20,
   calmSun: true,
+  // Election night: the TV can show this page instead of the scores (a mode, and a
+  // "service" for any Game day screen), through the end of the `until` day.
+  election: {name: 'Election results', url: 'https://midterm-tracker-2026.vercel.app/#election-night', until: '2026-11-04'},
   place: null, // {name, lat, lon} for sunrise/sunset; null = the main city of the Mac's time zone
   // Live win-probability chart over each game (Polymarket). delay: seconds behind the market,
   // since prices move 10–20 s before the broadcast shows the play.
@@ -205,6 +208,8 @@ function sanitizeConfig(saved) {
     return sun ? {...rest, sun} : rest;
   });
   c.calmSun = typeof c.calmSun === 'boolean' ? c.calmSun : true;
+  c.election = isObj(c.election) && validUrl(c.election.url) && /^\d{4}-\d{2}-\d{2}$/.test(c.election.until || '')
+    ? {name: String(c.election.name || 'Election results').slice(0, 40), url: c.election.url, until: c.election.until} : null;
   c.place = validPlace(c.place);
   if (!(c.rotateMinutes >= 1 && c.rotateMinutes <= 1440)) c.rotateMinutes = defaultConfig.rotateMinutes;
   if (!(c.titlebar >= 0 && c.titlebar <= 80)) c.titlebar = defaultConfig.titlebar;
@@ -535,7 +540,7 @@ async function oddsTick() {
   oddsBusy = true;
   try {
     const on = config.odds.on && state.mode === 'grid';
-    const shown = state.mode === 'grid' ? visibleSlots().filter(s => s.service !== 'sportsboard') : [];
+    const shown = state.mode === 'grid' ? visibleSlots().filter(isGame) : [];
     const list = shown.map(s => ({uid: s.uid, id: state.windows[`slot:${s.uid}`]})).filter(x => x.id);
     const run = items => osa(`return JSON.stringify(arg.map(it=>{try{return chrome.windows.byId(it.id).activeTab.execute({javascript:it.js})}catch(e){return null}}))`, items).catch(() => []);
     if (!on) { // take any charts down once, then leave the pages alone
@@ -602,7 +607,14 @@ let cleanApplied = null;
 // ---------- applying state to the screen ----------
 // The scoreboard on the TV runs in TV mode: no controls, sized to fill its window.
 const resolveUrl = u => u.startsWith('local:') ? base + (u === 'local:/' ? '/?tv=1' : u.slice(6)) : u;
-const serviceUrl = s => s.link || config.services.find(x => x.id === s.service)?.url || 'about:blank';
+const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const electionOn = () => !!config.election && localDay() <= config.election.until;
+// Streaming services, plus the election page while it's offered.
+// (A screen still set to it afterwards keeps the choice, showing the scores instead.)
+const allServices = () => electionOn() ? [...config.services, {id: 'election', name: config.election.name, url: config.election.url}]
+  : state.slots.some(s => s.service === 'election') ? [...config.services, {id: 'election', name: 'Election results (over)', url: 'local:/'}] : config.services;
+const isGame = s => s.service !== 'sportsboard' && s.service !== 'election'; // screens with sound, odds and playback
+const serviceUrl = s => s.link || (s.service === 'election' && !electionOn() ? 'local:/' : allServices().find(x => x.id === s.service)?.url) || 'about:blank';
 const visibleSlots = () => state.slots.slice(0, LAYOUTS[state.layout]?.slots || 1);
 
 function desiredWindows(area) {
@@ -613,8 +625,9 @@ function desiredWindows(area) {
     want.push({key: 'backdrop', url: `${base}/backdrop`, rect: area});
     if (plan.scores) want.push({key: 'sidebar', url: `${base}/sidebar`, rect: plan.scores});
     visibleSlots().forEach((s, i) => want.push({key: `slot:${s.uid}`, slot: s, url: resolveUrl(serviceUrl(s)), rect: state.solo === s.uid ? plan.canvas : plan.tiles[i]}));
-  } else if (state.mode === 'sportsboard') {
-    want.push({key: 'main', url: `${base}/?tv=1`, rect: area});
+  } else if (state.mode === 'sportsboard' || state.mode === 'election') {
+    // One window for both, so switching between scores and election results is quick.
+    want.push({key: 'main', url: state.mode === 'election' && electionOn() ? config.election.url : `${base}/?tv=1`, rect: area});
   } else if (state.mode === 'calm') {
     want.push({key: 'calm', url: `${base}/calm`, rect: area});
   }
@@ -673,6 +686,7 @@ async function applyNow() {
   // Streams that finish loading late can pop their window forward, and need the page
   // script (mutes, black frame, video-only YouTube); run both again shortly.
   for (const ms of [3000, 8000]) setTimeout(() => { lock = lock.then(applyAudio).then(keepStacking).catch(() => {}); }, ms);
+  if (electionWindows().length) for (const ms of [4000, 12000]) setTimeout(() => { electionTick().catch(() => {}); }, ms); // size it for the TV once it has loaded
   if (bars) await parkPointer(area).catch(() => {});
   state.debug = {area, want: want.map(w => ({key: w.key, id: state.windows[w.key], rect: w.rect})),
     got: await osa(`return JSON.stringify(arg.map(id=>{try{const w=chrome.windows.byId(id);return {id,index:w.index(),b:w.bounds(),title:w.name(),url:w.activeTab.url()}}catch(e){return {id,err:String(e)}}}))`, order).catch(e => String(e))};
@@ -690,7 +704,7 @@ async function applyNow() {
 async function applyAudio() {
   bumpAudio(); // wakes the sound helper so it re-applies tab mutes right away
   if (state.mode === 'off') return [];
-  const visible = state.mode === 'grid' ? visibleSlots().filter(s => s.service !== 'sportsboard') : [];
+  const visible = state.mode === 'grid' ? visibleSlots().filter(isGame) : [];
   if (state.mode === 'grid' && state.audio !== 'none' && !visible.some(s => s.uid === state.audio)) state.audio = visible[0]?.uid || null;
   // With the helper, keep every page's own video unmuted and let Chrome's tab mute decide.
   const helper = helperActive();
@@ -792,6 +806,49 @@ function calmBlocks(now = new Date()) {
   return {blocks, sun: want, place};
 }
 const calmInfo = () => { const {blocks, sun, place} = calmBlocks(); return {on: config.calmSun, place, sunrise: sun?.sunrise ?? null, sunset: sun?.sunset ?? null, blocks: blocks.map(b => ({from: b.from, sun: b.sun || null, start: b.start}))}; };
+
+// ---------- election results on the TV ----------
+// Runs in a window showing the election page: lays it out 1280 wide and scales it to
+// fill the window (readable from the couch), hides the scrollbar, and scrolls it slowly
+// top to bottom and back, since nobody can scroll the TV. Safe to run again.
+export const ELECTION_JS = `(()=>{const z=Math.max(.6,Math.min(3,innerWidth/1280));
+document.documentElement.style.zoom=String(z);
+if(window.__sbElection)return 'ok';window.__sbElection=1;
+const st=document.createElement('style');st.textContent='html{scrollbar-width:none}html::-webkit-scrollbar{display:none}body{cursor:none}';document.head.appendChild(st);
+const PAUSE_TOP=25000,PAUSE_END=12000,SPEED=45;let phase='top',t0=performance.now(),y0=0;
+const max=()=>Math.max(0,document.documentElement.scrollHeight-innerHeight);
+const step=now=>{const m=max();
+if(phase==='top'){if(now-t0>PAUSE_TOP&&m>4){phase='down';t0=now;}}
+else if(phase==='down'){const y=Math.min(m,(now-t0)/1000*SPEED);scrollTo(0,y);if(y>=m){phase='end';t0=now;}}
+else if(now-t0>PAUSE_END){scrollTo({top:0,behavior:'smooth'});phase='top';t0=now;}
+requestAnimationFrame(step)};
+requestAnimationFrame(step);return 'ok';})()`;
+const ELECTION_RELOAD = 5 * 60e3; // the tracker only loads its data when the page opens
+let electionLoaded = new Map(); // window id -> when it was last (re)loaded by us
+function electionWindows() {
+  if (!electionOn()) return [];
+  const keys = state.mode === 'election' ? ['main'] : state.mode === 'grid' ? visibleSlots().filter(s => s.service === 'election' && !s.link).map(s => `slot:${s.uid}`) : [];
+  return keys.map(k => state.windows[k]).filter(Boolean);
+}
+let electionBusy = false;
+async function electionTick() {
+  if (process.platform !== 'darwin' || TESTING || electionBusy) return;
+  electionBusy = true;
+  try {
+    const ids = electionWindows(), now = Date.now();
+    for (const id of [...electionLoaded.keys()]) if (!ids.includes(id)) electionLoaded.delete(id);
+    if (!ids.length) return;
+    // A window that just started showing the page is fresh; reload the others every few minutes.
+    const stale = ids.filter(id => electionLoaded.has(id) && now - electionLoaded.get(id) > ELECTION_RELOAD);
+    for (const id of ids) if (!electionLoaded.has(id) || stale.includes(id)) electionLoaded.set(id, now);
+    if (stale.length) {
+      await osa(`for(const id of arg){try{chrome.windows.byId(id).activeTab.reload()}catch(e){}}return 'ok'`, stale).catch(() => {});
+      await sleep(5000); // let the page load and fetch its data
+    }
+    await osa(`return JSON.stringify(arg.ids.map(id=>{try{return chrome.windows.byId(id).activeTab.execute({javascript:arg.js})}catch(e){return null}}))`, {ids, js: ELECTION_JS}).catch(() => {});
+  } finally { electionBusy = false; }
+}
+setInterval(() => { electionTick().catch(() => {}); }, 30000).unref?.();
 
 // ---------- calm scenes ----------
 export const sceneCategory = s => s.category || (s.type === 'aerial' ? 'Apple Aerials' : 'My scenes');
@@ -921,13 +978,14 @@ const validUrl = u => { try { const x = new URL(u); return ['http:', 'https:'].i
 // Build the complete next state from a change request without touching the live
 // state. Anything invalid throws, so a rejected request changes nothing.
 const PATCH_KEYS = new Set(['mode', 'layout', 'sidebar', 'clean', 'display', 'slots', 'audio', 'solo', 'calm']);
-const MODES = ['off', 'grid', 'sportsboard', 'calm'];
+const MODES = ['off', 'grid', 'sportsboard', 'calm', 'election'];
 function buildCandidate(p, from = state) {
   if (!isObj(p)) bad('Expected a JSON object');
   for (const k of Object.keys(p)) if (!PATCH_KEYS.has(k)) bad(`Unknown setting: ${k}`);
   const next = {...from, calm: {...from.calm}, slots: from.slots.map(s => ({...s}))};
   if (p.mode !== undefined) {
     if (!MODES.includes(p.mode)) bad('Bad mode');
+    if (p.mode === 'election' && !electionOn()) bad('Election results are only offered on election night.');
     if (p.mode === 'grid' && from.mode !== 'grid') next.gridSince = new Date().toISOString();
     next.mode = p.mode;
   }
@@ -944,7 +1002,7 @@ function buildCandidate(p, from = state) {
     const given = new Set(p.slots.map(s => s?.uid).filter(Boolean)), seen = new Set();
     next.slots = p.slots.map(s => {
       if (!isObj(s)) bad('Bad screen');
-      if (typeof s.service !== 'string' || !config.services.some(x => x.id === s.service)) bad('Unknown service');
+      if (typeof s.service !== 'string' || !allServices().some(x => x.id === s.service)) bad('Unknown service');
       if (s.link != null && typeof s.link !== 'string') bad('Bad link');
       const link = (s.link || '').trim();
       if (link && !validUrl(link)) bad('Links must start with http:// or https://');
@@ -997,7 +1055,7 @@ export async function handleWall(req, res, url, port) {
       if (!privateIp(req.socket.remoteAddress) || !sameOrigin) { send(res, 403, {error: 'Forbidden'}); return true; }
     }
     if (p === '/api/wall' && req.method === 'GET') {
-      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, calmTimes: calmInfo(), calmBroken: brokenList(), calmStuck: stuckNow(), services: config.services, channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
+      send(res, 200, {odds: {...config.odds, screens: oddsStatus}, state: publicState(), soundHelper: helperActive(), helperVersion, canRestart: underService(), started: BOOT, calmTimes: calmInfo(), calmBroken: brokenList(), calmStuck: stuckNow(), election: electionOn() ? {name: config.election.name, url: config.election.url} : null, services: allServices(), channels: config.channels, scenes: config.scenes, layouts: LAYOUTS, scene: sceneNow(), remoteUrls: lanAddresses(port), aerialCount: (await aerials()).length,
         displays: (await listDisplays(20000)).map(({id, name, primary, frame}) => ({id, name, primary, width: Math.round(frame.width), height: Math.round(frame.height)}))});
     } else if (p === '/api/wall/audio') {
       // Only the Sportsboard Sound extension counts as "the helper is running".
@@ -1050,7 +1108,7 @@ export async function handleWall(req, res, url, port) {
       if (b.screen != null && typeof b.screen !== 'string') return send(res, 400, {error: 'Bad screen.'}), true;
       if (state.mode !== 'grid') return send(res, 409, {error: 'Playback controls work in Game day.'}), true;
       const shown = visibleSlots(), uid = b.screen ?? state.audio, slot = shown.find(s => s.uid === uid);
-      if (!slot || slot.service === 'sportsboard') return send(res, 409, {error: 'Pick a screen with sound (🔊) to control it.'}), true;
+      if (!slot || !isGame(slot)) return send(res, 409, {error: 'Pick a screen with sound (🔊) to control it.'}), true;
       const id = state.windows[`slot:${uid}`];
       if (!id || process.platform !== 'darwin' || TESTING) return send(res, 409, {error: 'That screen isn\'t open on the TV right now.'}), true;
       let d;

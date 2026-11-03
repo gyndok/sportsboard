@@ -500,3 +500,44 @@ test('a Calm video that sat paused is reported and explained', () => withServer(
   await post('/api/wall', {calm: {pinned: null}});
   await post('/api/wall/scene', {remove: 'yt-fffffffffff'});
 }));
+
+test('election night: its own TV mode and a Game day screen choice, only until its last day', async () => {
+  const {initWall, ELECTION_JS} = await import('../wall.mjs');
+  const cfg = path.join(os.tmpdir(), `wall-config-test-${process.pid}.json`);
+  const url = 'https://tracker.example/#election-night';
+  assert.doesNotThrow(() => new Function('return ' + ELECTION_JS), 'the page script compiles');
+  await writeFile(cfg, JSON.stringify({election: {name: 'Election results', url, until: '2999-12-31'}}));
+  await initWall({port: 0});
+  await withServer(async base => {
+    const post = body => fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const get = async () => (await fetch(`${base}/api/wall`)).json();
+    let d = await get();
+    assert.deepEqual(d.election, {name: 'Election results', url});
+    assert.ok(d.services.some(s => s.id === 'election' && s.url === url), 'offered as a screen choice');
+    assert.equal((await post({mode: 'election'})).status, 200);
+    assert.equal((await get()).state.mode, 'election');
+    const slots = d.state.slots.map(s => ({...s}));
+    slots[1].service = 'election';
+    assert.equal((await post({mode: 'grid', slots})).status, 200);
+    assert.equal((await post({mode: 'sportsboard'})).status, 200);
+    const pb = await fetch(`${base}/api/wall/playback`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'toggle', screen: slots[1].uid})});
+    assert.equal(pb.status, 409, 'the election screen has no playback');
+  });
+  await writeFile(cfg, JSON.stringify({election: {name: 'Election results', url, until: '2000-01-01'}}));
+  await initWall({port: 0});
+  await withServer(async base => {
+    const d = await (await fetch(`${base}/api/wall`)).json();
+    assert.equal(d.election, null, 'gone after its last day');
+    const r = await fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({mode: 'election'})});
+    assert.equal(r.status, 400); assert.match((await r.json()).error, /election night/);
+    // A screen left on the election page still saves (it shows the scores now).
+    assert.ok(d.services.some(s => s.id === 'election' && s.url === 'local:/') || !d.state.slots.some(s => s.service === 'election'));
+    const again = await fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({slots: d.state.slots})});
+    assert.equal(again.status, 200, 'saving the screens still works');
+  });
+  for (const bad of [{url: 'javascript:alert(1)', until: '2999-12-31'}, {url, until: 'tonight'}, 'yes']) {
+    await writeFile(cfg, JSON.stringify({election: bad}));
+    await initWall({port: 0});
+    await withServer(async base => assert.equal((await (await fetch(`${base}/api/wall`)).json()).election, null, JSON.stringify(bad)));
+  }
+});

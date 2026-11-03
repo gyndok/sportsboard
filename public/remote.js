@@ -1,4 +1,5 @@
 const $ = s => document.querySelector(s);
+const isGame = slot => slot.service !== 'sportsboard' && slot.service !== 'election'; // screens with sound and playback
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 let wall = null, busy = false;
 
@@ -26,9 +27,12 @@ async function patch(body, label = 'Updating TV…') {
 
 function render() {
   const s = wall.state;
-  $('#status').textContent = {grid: 'Game day', sportsboard: 'Scoreboard', calm: 'Calm', off: 'Off'}[s.mode];
+  $('#status').textContent = {grid: 'Game day', sportsboard: 'Scoreboard', election: 'Election results', calm: 'Calm', off: 'Off'}[s.mode];
+  // Election night: a mode of its own, a button on the scoreboard panel, and a screen choice in Game day.
+  document.querySelectorAll('[data-mode=election]').forEach(b => { b.hidden = !wall.election; });
+  $('#election-hint').textContent = wall.election ? `${wall.election.name} from ${new URL(wall.election.url).hostname}, on its Election night tab. It scrolls slowly from top to bottom and reloads every 5 minutes to pick up new results. In Game day you can also put it on any screen: pick “${wall.election.name}” in that screen's menu.` : 'Election results are only offered on election night.';
   document.querySelectorAll('#modes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.mode === s.mode));
-  for (const [id, m] of [['grid-panel', 'grid'], ['calm-panel', 'calm'], ['sb-panel', 'sportsboard'], ['off-panel', 'off']]) $('#' + id).hidden = s.mode !== m;
+  for (const [id, m] of [['grid-panel', 'grid'], ['calm-panel', 'calm'], ['sb-panel', 'sportsboard'], ['election-panel', 'election'], ['off-panel', 'off']]) $('#' + id).hidden = s.mode !== m;
   // In Off/Scoreboard, still let him pre-configure game day
   if (s.mode === 'off') $('#grid-panel').hidden = false;
   $('#warnings').innerHTML = (s.warnings || []).map(w => `<p class="warn">${esc(w)}</p>`).join('');
@@ -39,16 +43,16 @@ function render() {
   const svcName = id => wall.services.find(x => x.id === id)?.name || id;
   const what = slot => (wall.channels || []).find(c => c.url === slot.link)?.name || (slot.link ? 'Game link' : svcName(slot.service).replace(' / Sunday Ticket', ''));
   const showing = s.mode === 'grid' ? s.slots.slice(0, wall.layouts[s.layout].slots) : [];
-  $('#sound-bar').innerHTML = showing.length ? showing.map((slot, i) => slot.service === 'sportsboard' ? '' :
+  $('#sound-bar').innerHTML = showing.length ? showing.map((slot, i) => !isGame(slot) ? '' :
       `<button data-audio="${slot.uid}" aria-pressed="${s.audio === slot.uid}"><b>${s.audio === slot.uid ? '🔊' : '🔈'} ${i + 1}</b><small>${esc(what(slot))}</small></button>`).join('') +
       `<button data-audio="none" aria-pressed="${s.audio === 'none'}"><b>🔇</b><small>Mute all</small></button>`
     : '<p class="hint">Start Game day to choose which screen you hear.</p>';
   const mainLayout = s.mode === 'grid' && /^main/.test(s.layout);
   $('#swap-wrap').hidden = !mainLayout;
-  if (mainLayout) $('#swap-bar').innerHTML = showing.slice(1).map((slot, i) => slot.service === 'sportsboard' ? '' :
+  if (mainLayout) $('#swap-bar').innerHTML = showing.slice(1).map((slot, i) => !isGame(slot) ? '' :
     `<button data-promote="${slot.uid}"><b>⇱ ${i + 2}</b><small>${esc(what(slot))}</small></button>`).join('');
   // Playback controls follow the screen you're listening to.
-  const heard = showing.findIndex(slot => slot.uid === s.audio && slot.service !== 'sportsboard');
+  const heard = showing.findIndex(slot => slot.uid === s.audio && isGame(slot));
   $('#pb-wrap').hidden = s.mode !== 'grid';
   $('#pb-target').textContent = heard >= 0 ? `Screen ${heard + 1} · ${what(showing[heard])}` : '';
   document.querySelectorAll('#pb button').forEach(b => { b.disabled = heard < 0; });
@@ -229,6 +233,7 @@ function incr(a) { return a.split('/').map(Number).map(n => n + 1).join('/'); }
 const slotsCopy = () => wall.state.slots.map(s => ({...s}));
 
 $('#modes').addEventListener('click', e => { const b = e.target.closest('button'); if (b) patch({mode: b.dataset.mode}, b.dataset.mode === 'off' ? 'Closing windows…' : 'Setting up the TV…'); });
+document.querySelectorAll('.big-toggle').forEach(b => b.addEventListener('click', () => patch({mode: b.dataset.mode}, b.dataset.mode === 'election' ? 'Opening election results…' : 'Back to the scoreboard…')));
 $('#layouts').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   const need = wall.layouts[b.dataset.layout].slots, slots = slotsCopy();
