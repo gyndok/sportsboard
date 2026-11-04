@@ -116,3 +116,6 @@ body.sidebar{background:#000;font-family:'Board','Roboto Condensed','Arial Narro
   .side h3{grid-column:1/-1;margin-top:10px}
 }
 .side footer.warn-foot{color:var(--red)}
+.side h3.el-head{color:var(--a);text-shadow:0 0 .3em #ffcf3a66;font-size:18px}.side h3.el-head small{display:block;font-size:12px;color:var(--w);letter-spacing:.04em;margin-top:2px}
+.side .g .meta span:first-child{overflow:hidden;text-overflow:ellipsis}.side .g .meta span:last-child{flex:none}
+.side h3.el-split{margin-top:22px;padding-top:10px;border-top:2px solid var(--rule)}

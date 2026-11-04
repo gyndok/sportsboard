@@ -40,6 +40,9 @@ function render() {
   $('#layouts').innerHTML = Object.entries(wall.layouts).map(([id, l]) =>
     `<button data-layout="${id}" aria-pressed="${s.layout === id}" title="${esc(l.name)}"><span class="mini l-${id}">${layoutIcons[id].map(a => `<i style="grid-area:${incr(a)}"></i>`).join('')}</span><small>${esc(l.name)}</small></button>`).join('');
   $('#sidebar').checked = s.sidebar;
+  // Election night: the panel beside the games can show the races instead of (or with) the scores.
+  $('#panel-show').hidden = !wall.election;
+  document.querySelectorAll('#panel-show button').forEach(b => b.setAttribute('aria-pressed', s.sidebar && (s.panel || 'scores') === b.dataset.panel));
   const svcName = id => wall.services.find(x => x.id === id)?.name || id;
   const what = slot => (wall.channels || []).find(c => c.url === slot.link)?.name || (slot.link ? 'Game link' : svcName(slot.service).replace(' / Sunday Ticket', ''));
   const showing = s.mode === 'grid' ? s.slots.slice(0, wall.layouts[s.layout].slots) : [];
@@ -255,6 +258,7 @@ $('#swap-bar').addEventListener('click', e => {
 });
 $('#sound-bar').addEventListener('click', e => { const b = e.target.closest('[data-audio]'); if (b) patch({audio: b.dataset.audio}, 'Switching sound…'); });
 $('#sidebar').addEventListener('change', e => patch({sidebar: e.target.checked}));
+$('#panel-show').addEventListener('click', e => { const b = e.target.closest('[data-panel]'); if (b) patch({panel: b.dataset.panel, sidebar: true}, b.dataset.panel === 'scores' ? 'Showing scores…' : 'Showing election results…'); });
 // ---------- playback (the screen with sound) ----------
 const clockText = n => { n = Math.max(0, Math.round(n || 0)); const h = Math.floor(n / 3600), m = Math.floor(n / 60) % 60, sec = String(n % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`; };
 function playbackText(d, action) {

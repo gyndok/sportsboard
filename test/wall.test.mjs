@@ -541,3 +541,54 @@ test('election night: its own TV mode and a Game day screen choice, only until i
     await withServer(async base => assert.equal((await (await fetch(`${base}/api/wall`)).json()).election, null, JSON.stringify(bad)));
   }
 });
+
+test('election results for the scores panel: the tracker’s races, the Senate count, and the panel setting', async () => {
+  const {initWall, electionBoard} = await import('../wall.mjs');
+  const data = {
+    control: [{chamber: 'Senate', d_not_up: 34, r_not_up: 31, majority: 51}, {chamber: 'House'}],
+    senate: [
+      {state: 'TX', cook: 'Toss-up', dem: 'James Talarico', rep: 'Ken Paxton', close_ct: '7:00 PM', res_d: 51.24, res_r: 47.9, reporting: 63.4},
+      {state: 'NE', cook: 'Lean R', dem: 'Dan Osborn (I)', rep: 'Pete Ricketts (inc.)', other: 'I', close_ct: '8:00 PM'},
+      {state: 'GA', cook: 'Likely D', dem: 'Jon Ossoff (inc.)', rep: 'Mike Collins', close_ct: '6:00 PM', res_d: 54, res_r: 45, reporting: 90, call: 'D'},
+      {state: 'WY', cook: 'Solid R', dem: 'A', rep: 'B', call: 'R'}],
+    governors: [{state: 'GA', cook: 'Toss-up', dem: 'Bottoms', rep: 'Jackson', close_ct: '6:00 PM'}, {state: 'NY', cook: 'Likely D', dem: 'X', rep: 'Y'}],
+    tx_statewide: [{office: 'U.S. Senate'}, {office: 'Lt. Governor', dem: 'Vikki Goodwin', rep: 'Dan Patrick (inc.)'}],
+    harris: [{race: 'County Judge', dem: 'Letitia Plummer', rep: 'Orlando Sanchez'}, {race: 'U.S. Senate (Harris voters)'}],
+    sources: {senate: {updated: '2026-11-03T19:05:00-06:00'}, control: {updated: '2026-11-02T06:55:00-06:00'}, dates: {updated: '2026-11-04T00:00:00Z'}}
+  };
+  const b = electionBoard(data);
+  assert.deepEqual(b.senate, {d: 35, r: 32, i: 0, called: 2, pending: 2, majority: 51}, 'seats not up plus calls');
+  assert.deepEqual(b.races.map(r => `${r.kind} ${r.where}`), ['Senate TX', 'Senate NE', 'Senate GA', 'Gov GA', 'TX Lt. Governor', 'Harris County Judge'], 'the same races as the tracker’s results table');
+  assert.deepEqual(b.races[0], {kind: 'Senate', where: 'TX', close: '7:00 PM', d: {name: 'Talarico', party: 'D', pct: 51.2}, r: {name: 'Paxton', party: 'R', pct: 47.9}, reporting: 63, call: null});
+  assert.deepEqual([b.races[1].d, b.races[1].r.name], [{name: 'Osborn', party: 'I', pct: null}, 'Ricketts']);
+  assert.equal(b.races[2].call, 'D');
+  assert.equal(b.updated, '2026-11-04T01:05:00.000Z', 'newest update among the races’ own files');
+  assert.deepEqual(electionBoard({}), {updated: null, senate: null, races: []}, 'missing files give an empty board');
+
+  const cfg = path.join(os.tmpdir(), `wall-config-test-${process.pid}.json`);
+  await writeFile(cfg, JSON.stringify({election: {name: 'Election results', url: 'https://tracker.example/#election-night', until: '2999-12-31'}}));
+  await initWall({port: 0});
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const u = new URL(String(url));
+    if (u.hostname !== 'tracker.example') return realFetch(url, opts);
+    const id = u.pathname.replace(/^\/data\/|\.json$/g, '');
+    return Object.hasOwn(data, id) ? new Response(JSON.stringify(data[id])) : new Response('nope', {status: 404});
+  };
+  try {
+    await withServer(async base => {
+      const r = await fetch(`${base}/api/wall/election`);
+      assert.equal(r.status, 200);
+      const d = await r.json();
+      assert.equal(d.source, 'tracker.example'); assert.equal(d.races.length, 6); assert.equal(d.senate.d, 35);
+      const post = body => fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      assert.equal((await post({panel: 'both', sidebar: true})).status, 200);
+      assert.equal((await (await fetch(`${base}/api/wall`)).json()).state.panel, 'both');
+      assert.equal((await post({panel: 'news'})).status, 400);
+      assert.equal((await fetch(`${base}/api/wall/election`, {method: 'POST'})).status, 405);
+    });
+  } finally { globalThis.fetch = realFetch; }
+  await writeFile(cfg, JSON.stringify({election: {name: 'Election results', url: 'https://tracker.example/', until: '2000-01-01'}}));
+  await initWall({port: 0});
+  await withServer(async base => assert.equal((await fetch(`${base}/api/wall/election`)).status, 404, 'only on election night'));
+});

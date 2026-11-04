@@ -49,7 +49,48 @@ const game = (e, i) => {
 </div>`;
 };
 
+// Election night: the panel can show the tracker's races too (?show=election or ?show=both).
+const show = new URLSearchParams(location.search).get('show');
+let election = null;
+async function loadElection() {
+  if (show !== 'election' && show !== 'both') return;
+  try { const r = await fetch('/api/wall/election', {cache: 'no-store'}); election = r.ok ? await r.json() : {error: (await r.json().catch(() => ({}))).error || 'Election results unavailable'}; }
+  catch { election = election || {error: 'Election results unavailable'}; }
+}
+const closeMin = t => { const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(t || ''); return m ? (Number(m[1]) % 12 + (/pm/i.test(m[3]) ? 12 : 0)) * 60 + Number(m[2]) : 9999; };
+const fmtClose = t => closeMin(t) < 9999 ? t.replace(':00', '') : 'TBD';
+const raceCard = (x, i) => {
+  const counting = !x.call && (x.reporting != null || x.d.pct != null);
+  const status = x.call ? `${x.call} WIN` : counting ? (x.reporting != null ? `${x.reporting}% IN` : 'COUNTING') : `CLOSES ${fmtClose(x.close)}`;
+  const side = c => `<div class="row"><span>${x.call === c.party ? '✓ ' : ''}<small>${c.party}</small>${esc(c.name)}</span><span class="r"><b>${c.pct != null ? c.pct.toFixed(1) : ''}</b></span></div>`;
+  const where = String(x.where).replace('Railroad Commissioner', 'Railroad Comm.').replace(/Commissioner,?/, 'Comm.').replace('Attorney General', 'Atty. Gen.').replace('Lt. Governor', 'Lt. Gov.');
+  return `<div class="g s${i % 2} ${x.call ? 'post' : counting ? 'in' : 'pre'}"><div class="meta"><span>${esc(x.kind)} · ${esc(where)}</span><span>${esc(status)}</span></div>${side(x.d)}${side(x.r)}</div>`;
+};
+function electionHtml() {
+  if (!election) return '<p class="empty">Loading election results…</p>';
+  if (election.error) return `<p class="empty">${esc(election.error)}</p>`;
+  const races = election.races || [], s = election.senate;
+  const counting = races.filter(x => !x.call && (x.reporting != null || x.d.pct != null)).sort((a, b) => (b.reporting ?? 0) - (a.reporting ?? 0));
+  const called = races.filter(x => x.call);
+  const waiting = races.filter(x => !x.call && x.reporting == null && x.d.pct == null).sort((a, b) => closeMin(a.close) - closeMin(b.close));
+  const block = (title, list) => list.length ? `<h3>${title}</h3>${list.map((x, i) => raceCard(x, i)).join('')}` : '';
+  const head = s ? `<h3 class="el-head">Senate · D ${s.d} · R ${s.r}${s.i ? ` · I ${s.i}` : ''}<small>${s.pending} to call · ${s.majority} for control</small></h3>` : '';
+  return head + block(`Counting · ${counting.length}`, counting) + block(`Called · ${called.length}`, called) + block('Polls close', waiting);
+}
+const electionNote = () => election && !election.error
+  ? `Election results via ${election.source || 'the tracker'}${election.updated ? ` · updated ${whenText(new Date(election.updated))}` : ''}${election.stale ? ' · retrying' : ''}` : '';
+function whenText(d) {
+  const t = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], {month: 'short', day: 'numeric'})}, ${t}`;
+}
+
 async function refresh() {
+  await loadElection();
+  if (show === 'election') {
+    $('#track').innerHTML = electionHtml();
+    $('#foot').textContent = electionNote();
+    return;
+  }
   const feed = await ScoreFeed.load();
   const all = feed.events;
   await loadMarkets(all);
@@ -58,8 +99,9 @@ async function refresh() {
   const next = all.filter(e => e.state === 'pre').sort(byFav).slice(0, 12);
   const done = all.filter(e => e.state === 'post').sort((a, b) => isFav(b) - isFav(a) || Date.parse(b.date) - Date.parse(a.date)).slice(0, 10);
   const block = (title, list) => list.length ? `<h3>${title}</h3>${list.map((e, i) => game(e, i)).join('')}` : '';
-  $('#track').innerHTML = (block(`In progress · ${live.length}`, live) + block('Up next', next) + block('Final', done)) || `<p class="empty">${esc(ScoreFeed.emptyText(feed, 'No games today.'))}</p>`;
-  $('#foot').textContent = ScoreFeed.note(feed);
+  const games = (block(`In progress · ${live.length}`, live) + block('Up next', next) + block('Final', done)) || `<p class="empty">${esc(ScoreFeed.emptyText(feed, 'No games today.'))}</p>`;
+  $('#track').innerHTML = show === 'both' ? electionHtml() + '<h3 class="el-split">Scores</h3>' + games : games;
+  $('#foot').textContent = show === 'both' ? `${electionNote()} · ${ScoreFeed.note(feed)}` : ScoreFeed.note(feed);
   $('#foot').classList.toggle('warn-foot', !feed.complete);
 }
 refresh(); setInterval(refresh, 30000);

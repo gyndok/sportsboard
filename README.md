@@ -68,7 +68,7 @@ Window control uses `osascript` (JavaScript for Automation) and works only on ma
 
 ## Election night
 
-Through `election.until` in `wall-config.json` (default: the 2026 midterm tracker, through 2026-11-04), the remote offers an **Election** mode: the scoreboard's TV window switches to `election.url` (same window, so toggling is quick), and Game day screens can pick it as a service. `ELECTION_JS` lays the page out 1280 px wide with CSS zoom to fill the window, hides the scrollbar and scrolls it slowly top to bottom; the server reloads it every 5 minutes since the page only loads its data on open. After the `until` day the mode is refused and the service falls back to the scoreboard.
+Through `election.until` in `wall-config.json` (default: the 2026 midterm tracker, through 2026-11-04), the remote offers an **Election** mode: the scoreboard's TV window switches to `election.url` (same window, so toggling is quick), and Game day screens can pick it as a service. `ELECTION_JS` lays the page out 1280 px wide with CSS zoom to fill the window, hides the scrollbar and scrolls it slowly top to bottom; the server reloads it every 5 minutes since the page only loads its data on open. After the `until` day the mode is refused and the service falls back to the scoreboard. The Game day scores panel can show the tracker's races too (`state.panel`: `scores`, `election` or `both`; the sidebar opens with `?show=`): `GET /api/wall/election` reads the tracker's own `data/*.json` (control, senate, governors, tx_statewide, harris; cached a minute, last good kept) and returns the Senate count and the same races its results table lists.
 
 ## Reliability notes
 
