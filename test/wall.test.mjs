@@ -637,6 +637,10 @@ test('election results: civicAPI’s live counts over the tracker’s races, whe
   assert.equal(by('Harris County Judge').d.pct, null, 'not in civicAPI, and no near-namesake taken for it');
   assert.deepEqual(b.senate, {d: 35, r: 32, i: 1, called: 3, pending: 2, majority: 51}, 'calls from both sources, Solid seats included');
 
+  const {civicSearches} = await import('../wall.mjs');
+  assert.deepEqual(civicSearches({...data, governors: [...data.governors, {state: 'NY', cook: 'Likely D'}, {state: 'TX', cook: 'Lean R'}]}).map(x => x.what), ['Senate', 'TX', 'GA', 'Harris County'],
+    'one search for the Senate, one per state with a race shown, Harris County');
+  assert.deepEqual(civicSearches({}).map(x => x.what), ['Senate'], 'before the tracker has loaded');
   const old = [...civicMerge(new Map(), civic, Date.parse('2026-11-04T01:00:00Z')).values()];
   assert.deepEqual(electionBoard(data, old), electionBoard(data), 'older than the tracker: ignored');
 });

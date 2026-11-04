@@ -81,7 +81,7 @@ function electionHtml() {
 // while it's too busy to answer.
 const electionNote = () => {
   if (!election || election.error) return '';
-  const busy = election.live?.retrying?.length ? ` · civicAPI busy, retrying ${election.live.retrying.join(', ')}` : '';
+  const r = election.live?.retrying || [], busy = r.length ? ` · civicAPI busy, retrying ${r.length > 3 ? `${r.length} searches` : r.join(', ')}` : '';
   return election.liveAt ? `Live counts: civicAPI · ${whenText(new Date(election.liveAt))}${busy}`
     : `Election results via ${election.source || 'the tracker'}${election.updated ? ` · updated ${whenText(new Date(election.updated))}` : ''}${election.stale ? ' · retrying' : ''}${busy || ' · waiting for civicAPI’s live counts'}`;
 };
