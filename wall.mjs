@@ -937,38 +937,41 @@ export function electionBoard(d, live = null) {
 }
 
 // civicAPI (civicapi.org): free, no key, every race's count and call as they come in. A few
-// big searches cover all the panel's races; they take half a minute or more on election
-// night, so they run one at a time in the background, only while a panel is showing them.
+// big searches cover all the panel's races. On election night each takes half a minute or
+// more and about half fail (502), often instantly, so they run one at a time in the
+// background, only while a panel is showing them: a search that worked runs again in 90 s,
+// one that failed is retried in 20 s, and the panel keeps the races it already has.
 const CIVIC = 'https://civicapi.org/api/v2/race/search';
 const CIVIC_SEARCHES = [
-  {election_type: 'General', district: 'null', limit: '200'}, // the U.S. Senate races (federal races with no district)
-  {election_type: 'Statewide', limit: '1500'}, // governors and the other statewide offices
-  {query: 'Harris County', province: 'TX', limit: '100'}];
-let civic = {races: new Map(), ok: 0, error: null, searches: {}}, civicBusy = false, civicNext = 0, electionAsked = 0;
+  {what: 'Senate', election_type: 'General', district: 'null', limit: '200'}, // the U.S. Senate races (federal races with no district)
+  {what: 'Statewide', election_type: 'Statewide', limit: '1500'}, // governors and the other statewide offices
+  {what: 'Harris County', query: 'Harris County', province: 'TX', limit: '100'}];
+const CIVIC_AGAIN = 90e3, CIVIC_RETRY = 20e3;
+let civic = {races: new Map(), ok: 0, searches: {}, due: {}, failing: new Set()}, civicBusy = false, electionAsked = 0;
 const electionDay = () => config.election.date || localDay(new Date(Date.parse(`${config.election.until}T12:00:00`) - 864e5));
 async function civicCycle() {
-  if (TESTING || civicBusy || !electionOn() || Date.now() - electionAsked > 10 * 60e3 || Date.now() < civicNext) return;
+  if (TESTING || civicBusy || !electionOn() || Date.now() - electionAsked > 10 * 60e3) return;
+  const {what, ...s} = CIVIC_SEARCHES.find(x => !(civic.due[x.what] > Date.now())) || {};
+  if (!what) return;
   civicBusy = true;
+  const t0 = Date.now(), day = electionDay();
   try {
-    const day = electionDay();
-    for (const s of CIVIC_SEARCHES) {
-      const what = s.query || s.election_type, t0 = Date.now();
-      try {
-        const q = new URLSearchParams({country: 'US', ...s, startDate: day, endDate: day});
-        const r = await fetch(`${CIVIC}?${q}`, {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(150e3)});
-        if (!r.ok) throw Error(`civicAPI answered ${r.status}`);
-        const races = (await r.json()).races;
-        civicMerge(civic.races, races, Date.now());
-        civic.ok = Date.now(); civic.error = null;
-        civic.searches[what] = `${Array.isArray(races) ? races.length : 0} races in ${Math.round((Date.now() - t0) / 1000)} s`;
-      } catch (e) {
-        civic.error = e.message; civic.searches[what] = `failed after ${Math.round((Date.now() - t0) / 1000)} s: ${e.message}`;
-        console.error(`civicAPI ${what}: ${e.message}`);
-      }
-    }
-  } finally { civicBusy = false; civicNext = Date.now() + 75e3; }
+    const q = new URLSearchParams({country: 'US', ...s, startDate: day, endDate: day});
+    const r = await fetch(`${CIVIC}?${q}`, {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(150e3)});
+    if (!r.ok) throw Error(`answered ${r.status}`);
+    const races = (await r.json()).races;
+    civicMerge(civic.races, races, Date.now());
+    civic.ok = Date.now(); civic.due[what] = Date.now() + CIVIC_AGAIN;
+    civic.searches[what] = `${Array.isArray(races) ? races.length : 0} races in ${Math.round((Date.now() - t0) / 1000)} s`;
+    if (civic.failing.delete(what)) console.log(`civicAPI ${what}: answering again`);
+  } catch (e) {
+    civic.due[what] = Date.now() + CIVIC_RETRY;
+    civic.searches[what] = `failed after ${Math.round((Date.now() - t0) / 1000)} s: ${e.message}`;
+    if (!civic.failing.has(what)) console.error(`civicAPI ${what}: ${e.message}; retrying every ${CIVIC_RETRY / 1000} s`);
+    civic.failing.add(what);
+  } finally { civicBusy = false; }
 }
-setInterval(() => { civicCycle().catch(() => {}); }, 15e3).unref?.();
+setInterval(() => { civicCycle().catch(() => {}); }, 5e3).unref?.();
 
 async function electionData() {
   electionAsked = Date.now();
@@ -989,7 +992,7 @@ async function electionData() {
     }
   }
   return {...electionBoard(electionCache.raw, [...civic.races.values()]), source: dir.hostname, stale: electionCache.stale,
-    live: {source: 'civicAPI', ok: civic.ok ? new Date(civic.ok).toISOString() : null, error: civic.error, races: civic.races.size, searches: civic.searches}};
+    live: {source: 'civicAPI', ok: civic.ok ? new Date(civic.ok).toISOString() : null, retrying: [...civic.failing], races: civic.races.size, searches: civic.searches}};
 }
 
 // ---------- calm scenes ----------
