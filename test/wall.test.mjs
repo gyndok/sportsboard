@@ -563,7 +563,8 @@ test('election results for the scores panel: the tracker’s races, the Senate c
   assert.deepEqual([b.races[1].d, b.races[1].r.name], [{name: 'Osborn', party: 'I', pct: null}, 'Ricketts']);
   assert.equal(b.races[2].call, 'D');
   assert.equal(b.updated, '2026-11-04T01:05:00.000Z', 'newest update among the races’ own files');
-  assert.deepEqual(electionBoard({}), {updated: null, senate: null, races: []}, 'missing files give an empty board');
+  assert.equal(b.liveAt, null, 'no live counts');
+  assert.deepEqual(electionBoard({}), {updated: null, liveAt: null, senate: null, races: []}, 'missing files give an empty board');
 
   const cfg = path.join(os.tmpdir(), `wall-config-test-${process.pid}.json`);
   await writeFile(cfg, JSON.stringify({election: {name: 'Election results', url: 'https://tracker.example/#election-night', until: '2999-12-31'}}));
@@ -581,6 +582,7 @@ test('election results for the scores panel: the tracker’s races, the Senate c
       assert.equal(r.status, 200);
       const d = await r.json();
       assert.equal(d.source, 'tracker.example'); assert.equal(d.races.length, 6); assert.equal(d.senate.d, 35);
+      assert.equal(d.liveAt, null, 'civicAPI is never asked under tests'); assert.equal(d.live.source, 'civicAPI');
       const post = body => fetch(`${base}/api/wall`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
       assert.equal((await post({panel: 'both', sidebar: true})).status, 200);
       assert.equal((await (await fetch(`${base}/api/wall`)).json()).state.panel, 'both');
@@ -591,4 +593,50 @@ test('election results for the scores panel: the tracker’s races, the Senate c
   await writeFile(cfg, JSON.stringify({election: {name: 'Election results', url: 'https://tracker.example/', until: '2000-01-01'}}));
   await initWall({port: 0});
   await withServer(async base => assert.equal((await fetch(`${base}/api/wall/election`)).status, 404, 'only on election night'));
+});
+
+test('election results: civicAPI’s live counts over the tracker’s races, when they’re newer', async () => {
+  const {electionBoard, civicMerge} = await import('../wall.mjs');
+  const data = {
+    control: [{chamber: 'Senate', d_not_up: 34, r_not_up: 31, majority: 51}],
+    senate: [
+      {state: 'TX', cook: 'Toss-up', dem: 'James Talarico', rep: 'Ken Paxton', close_ct: '7:00 PM'},
+      {state: 'NE', cook: 'Lean R', dem: 'Dan Osborn (I)', rep: 'Pete Ricketts (inc.)', other: 'I', close_ct: '8:00 PM'},
+      {state: 'AK', cook: 'Toss-up', dem: 'Mary Peltola', rep: 'Dan Sullivan (inc.)', close_ct: '11:00 PM'},
+      {state: 'GA', cook: 'Likely D', dem: 'Jon Ossoff (inc.)', rep: 'Mike Collins', close_ct: '6:00 PM', res_d: 54, res_r: 45, reporting: 90, call: 'D'},
+      {state: 'WY', cook: 'Solid R', dem: 'A', rep: 'B'}],
+    governors: [{state: 'GA', cook: 'Toss-up', dem: 'Bottoms', rep: 'Jackson', close_ct: '6:00 PM'}],
+    tx_statewide: [{office: 'Lt. Governor', dem: 'Vikki Goodwin', rep: 'Dan Patrick (inc.)'}],
+    harris: [{race: 'County Judge', dem: 'Letitia Plummer', rep: 'Orlando Sanchez'}, {race: 'Commissioner, Pct. 4', dem: 'Lesley Briones (inc.)', rep: 'Steve Radack'}],
+    sources: {senate: {updated: '2026-11-04T01:05:00Z'}}
+  };
+  const c = (name, party, votes, percent, winner) => ({name, party, votes, percent, ...(winner ? {winner} : {})});
+  const civic = [
+    {id: 1, election_name: 'Texas US Senate', type: 'US Senate', province: 'TX', percent_reporting: 71, candidates: [c('Ted Brown', 'Libertarian', 3, 0.26), c('Ken Paxton', 'Republican', 550, 47.7), c('James Talarico', 'Democratic', 600, 52.04)]},
+    {id: 2, election_name: 'Nebraska US Senate Special', type: 'US Senate', province: 'NE', percent_reporting: 99, candidates: [c('Pete  Ricketts', 'Republican', 10, 40), c('Dan Osborn', 'Independent', 15, 60, true)]},
+    {id: 3, election_name: 'Alaska US Senate', type: 'US Senate', province: 'AK', percent_reporting: 5, candidates: [c('Gerald L. Heikes', 'Republican', 9, 1), c('Mary Peltola', 'Democratic', 500, 50), c('Daniel J. Jr. Sullivan', 'Nonpartisan', 480, 49)]},
+    {id: 4, election_name: 'Wyoming US Senate', type: 'US Senate', province: 'WY', percent_reporting: 60, candidates: [c('Harriet Hageman', 'Republican', 70, 70, true), c('James W. Byrd', 'Democratic', 30, 30)]},
+    {id: 5, election_name: 'Georgia Governor', type: 'Governor', province: 'GA', percent_reporting: 0, candidates: [c('Keisha Lance Bottoms', 'Democratic', 0, 0), c('Burt Jones', 'Republican', 0, 0)]},
+    {id: 6, election_name: 'Texas Lieutenant Governor', type: 'Lieutenant Governor', province: 'TX', percent_reporting: 12, candidates: [c('Dan Patrick', 'Republican', 80, 55.5), c('Vikki Goodwin', 'Democratic', 64, 44.5)]},
+    {id: 7, election_name: 'Harris County Commissioner, Precinct 4', type: 'Commissioner', province: 'TX', percent_reporting: 30, candidates: [c('Steve Radack', 'Republican', 40, 40), c('Lesley Briones', 'Democratic', 60, 60)]},
+    {id: 8, election_name: 'Harrison County Commissioner Precinct 2', type: 'Commissioner', province: 'TX', percent_reporting: 50, candidates: [c('Graff', 'Republican', 5, 50), c('Timmins', 'Democratic', 5, 50)]},
+    {id: 9, election_name: 'bad'}, null];
+  const at = Date.parse('2026-11-04T01:20:00Z'), live = [...civicMerge(new Map(), civic, at).values()];
+  assert.equal(live.length, 8, 'races without candidates are skipped');
+  assert.deepEqual(live[0].cands.map(x => x.party), ['D', 'R', 'O'], 'candidates sorted by votes, parties as letters');
+
+  const b = electionBoard(data, live), by = w => b.races.find(r => `${r.kind} ${r.where}` === w);
+  assert.equal(b.liveAt, '2026-11-04T01:20:00.000Z'); assert.equal(b.updated, b.liveAt);
+  assert.deepEqual(by('Senate TX'), {kind: 'Senate', where: 'TX', close: '7:00 PM', d: {name: 'Talarico', party: 'D', pct: 52}, r: {name: 'Paxton', party: 'R', pct: 47.7}, reporting: 71, call: null});
+  assert.deepEqual([by('Senate NE').d, by('Senate NE').r.name, by('Senate NE').call], [{name: 'Osborn', party: 'I', pct: 60}, 'Ricketts', 'I'], 'a “special” race found by state and kind; an independent’s win');
+  assert.deepEqual([by('Senate AK').r.name, by('Senate AK').r.pct], ['Sullivan', 49], 'the candidate by name before party');
+  assert.deepEqual([by('Senate GA').call, by('Senate GA').reporting], ['D', 90], 'tracker numbers stay where civicAPI has none');
+  assert.deepEqual([by('Gov GA').r.name, by('Gov GA').r.pct, by('Gov GA').reporting], ['Jones', null, null], 'no votes yet: names only, still waiting for polls to close');
+  assert.deepEqual([by('TX Lt. Governor').d.pct, by('TX Lt. Governor').r.pct], [44.5, 55.5]);
+  assert.equal(by('Harris Commissioner, Pct. 4').d.pct, 60, 'Pct. means Precinct');
+  assert.equal(by('Harris County Judge').d.pct, null, 'not in civicAPI, and no near-namesake taken for it');
+  assert.deepEqual(b.senate, {d: 35, r: 32, i: 1, called: 3, pending: 2, majority: 51}, 'calls from both sources, Solid seats included');
+
+  const old = [...civicMerge(new Map(), civic, Date.parse('2026-11-04T01:00:00Z')).values()];
+  assert.deepEqual(electionBoard(data, old), electionBoard(data), 'older than the tracker: ignored');
 });
