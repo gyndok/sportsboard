@@ -77,8 +77,10 @@ function electionHtml() {
   const head = s ? `<h3 class="el-head">Senate · D ${s.d} · R ${s.r}${s.i ? ` · I ${s.i}` : ''}<small>${s.pending} to call · ${s.majority} for control</small></h3>` : '';
   return head + block(`Counting · ${counting.length}`, counting) + block(`Called · ${called.length}`, called) + block('Polls close', waiting);
 }
-const electionNote = () => election && !election.error
-  ? `Election results via ${election.source || 'the tracker'}${election.updated ? ` · updated ${whenText(new Date(election.updated))}` : ''}${election.stale ? ' · retrying' : ''}` : '';
+// Credits civicAPI when its live counts are on the panel (it asks to be named).
+const electionNote = () => !election || election.error ? ''
+  : election.liveAt ? `Live counts: civicAPI · ${whenText(new Date(election.liveAt))}${election.live?.error ? ' · retrying' : ''}`
+  : `Election results via ${election.source || 'the tracker'}${election.updated ? ` · updated ${whenText(new Date(election.updated))}` : ''}${election.stale ? ' · retrying' : ''}`;
 function whenText(d) {
   const t = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
   return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], {month: 'short', day: 'numeric'})}, ${t}`;

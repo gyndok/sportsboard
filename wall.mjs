@@ -34,7 +34,8 @@ export const defaultConfig = {
   calmSun: true,
   // Election night: the TV can show this page instead of the scores (a mode, and a
   // "service" for any Game day screen), through the end of the `until` day.
-  election: {name: 'Election results', url: 'https://midterm-tracker-2026.vercel.app/#election-night', until: '2026-11-04'},
+  // `date` is election day, for the live counts (civicAPI); it defaults to the day before `until`.
+  election: {name: 'Election results', url: 'https://midterm-tracker-2026.vercel.app/#election-night', date: '2026-11-03', until: '2026-11-04'},
   place: null, // {name, lat, lon} for sunrise/sunset; null = the main city of the Mac's time zone
   // Live win-probability chart over each game (Polymarket). delay: seconds behind the market,
   // since prices move 10–20 s before the broadcast shows the play.
@@ -210,7 +211,8 @@ function sanitizeConfig(saved) {
   });
   c.calmSun = typeof c.calmSun === 'boolean' ? c.calmSun : true;
   c.election = isObj(c.election) && validUrl(c.election.url) && /^\d{4}-\d{2}-\d{2}$/.test(c.election.until || '')
-    ? {name: String(c.election.name || 'Election results').slice(0, 40), url: c.election.url, until: c.election.until} : null;
+    ? {name: String(c.election.name || 'Election results').slice(0, 40), url: c.election.url, until: c.election.until,
+      ...(/^\d{4}-\d{2}-\d{2}$/.test(c.election.date || '') ? {date: c.election.date} : {})} : null;
   c.place = validPlace(c.place);
   if (!(c.rotateMinutes >= 1 && c.rotateMinutes <= 1440)) c.rotateMinutes = defaultConfig.rotateMinutes;
   if (!(c.titlebar >= 0 && c.titlebar <= 80)) c.titlebar = defaultConfig.titlebar;
@@ -853,45 +855,141 @@ async function electionTick() {
 }
 setInterval(() => { electionTick().catch(() => {}); }, 30000).unref?.();
 
-// Election results for the scores panel, from the tracker's own data files (the same
-// races its results table shows), checked at most once a minute.
-let electionCache = {at: 0, data: null};
-const lastName = n => String(n || '').replace(/\([^)]*\)/g, ' ').trim().split(/\s+/).pop() || '';
+// Election results for the scores panel: the races the tracker's results table shows, from
+// its own data files (checked at most once a minute), with live counts from civicAPI laid
+// over them whenever civicAPI's numbers are newer than the tracker's.
+let electionCache = {at: 0, raw: null, stale: false};
+const lastName = n => String(n || '').replace(/\([^)]*\)/g, ' ').replace(/,?\s+(jr|sr|ii|iii|iv)\.?\s*$/i, '').trim().split(/\s+/).pop() || '';
 const pct = v => Number.isFinite(v) ? Math.round(v * 10) / 10 : null;
-export function electionBoard(d) {
+const STATE_NAMES = {AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia',
+  FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey',
+  NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
+  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming'};
+const raceKey = s => String(s || '').toLowerCase().replace(/\./g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const partyOf = p => /^dem/i.test(p) ? 'D' : /^rep/i.test(p) ? 'R' : /^ind/i.test(p) ? 'I' : 'O';
+// civicAPI's races, slimmed to what the panel needs and stamped with when we fetched them.
+export function civicMerge(map, races, at) {
+  for (const x of Array.isArray(races) ? races : []) {
+    if (!isObj(x) || x.id == null || !Array.isArray(x.candidates)) continue;
+    const cands = x.candidates.filter(isObj).map(c => ({name: String(c.name || ''), party: partyOf(c.party || ''), pct: Number(c.percent) || 0, votes: Number(c.votes) || 0, winner: c.winner === true}))
+      .sort((a, b) => b.votes - a.votes || b.pct - a.pct).slice(0, 6);
+    map.set(x.id, {id: x.id, key: raceKey(x.election_name), province: x.province || null, type: raceKey(x.type), reporting: Number(x.percent_reporting) || 0, cands, at});
+  }
+  return map;
+}
+// The civicAPI race for a tracker row: by its name, else the one race of that kind in the
+// state (a "special" Senate race, say), else the race in the state with the same candidates.
+function civicFind(index, want) {
+  if (!index) return null;
+  const hit = index.byKey.get(raceKey(want.name));
+  if (hit) return hit;
+  const inState = index.list.filter(x => x.province === want.province), names = want.names.map(n => lastName(n).toLowerCase()).filter(Boolean);
+  const same = want.type ? inState.filter(x => x.type === raceKey(want.type)) : [];
+  if (same.length === 1) return same[0];
+  const has = x => names.length && names.every(n => x.cands.some(c => lastName(c.name).toLowerCase() === n));
+  return (same.length ? same : inState).find(has) || null;
+}
+function withLive(row, live, since) {
+  if (!live || !(live.at > since)) return [row, 0];
+  const ln = n => lastName(n).toLowerCase();
+  // By name first (Alaska lists its Republican senator as nonpartisan), then the party's leader.
+  const named = name => ln(name) ? live.cands.filter(c => ln(c.name) === ln(name)) : [];
+  const pick = (party, name) => named(name).find(c => c.party === party) || named(name)[0] || live.cands.find(c => c.party === party) || null;
+  const d = pick(row.other === 'I' ? 'I' : 'D', row.dem), r = pick('R', row.rep);
+  if (!d && !r) return [row, 0];
+  const win = live.cands.find(c => c.winner), counted = live.cands.some(c => c.votes > 0);
+  const call = win && win === d ? (row.other === 'I' ? 'I' : 'D') : win && win === r ? 'R' : null;
+  return [{...row, dem: d?.name || row.dem, rep: r?.name || row.rep,
+    ...(counted ? {res_d: d ? d.pct : null, res_r: r ? r.pct : null, reporting: live.reporting} : {}),
+    call: call || row.call}, live.at];
+}
+export function electionBoard(d, live = null) {
+  const arr = x => Array.isArray(x) ? x.filter(isObj) : [];
+  const updated = Object.entries(isObj(d.sources) ? d.sources : {}).filter(([k]) => ['control', 'senate', 'governors', 'tx_statewide', 'harris'].includes(k))
+    .map(([, v]) => Date.parse(v?.updated)).filter(Number.isFinite).sort((a, b) => b - a)[0] || 0;
+  const list = Array.isArray(live) ? live : [], index = list.length ? {list, byKey: new Map(list.map(x => [x.key, x]))} : null;
+  let liveAt = 0;
+  const lay = (row, name, province, type) => {
+    const [out, at] = withLive(row, civicFind(index, {name, province, type, names: [row.dem, row.rep]}), updated);
+    liveAt = Math.max(liveAt, at);
+    return out;
+  };
+  const state = r => STATE_NAMES[r.state] || r.state;
+  const senateRows = arr(d.senate).map(r => lay(r, `${state(r)} US Senate`, r.state, 'US Senate'));
   const race = (kind, where, r, close) => ({kind, where, close: close || '',
     d: {name: lastName(r.dem), party: r.other === 'I' ? 'I' : 'D', pct: pct(r.res_d)},
     r: {name: lastName(r.rep), party: 'R', pct: pct(r.res_r)},
     reporting: Number.isFinite(r.reporting) ? Math.round(r.reporting) : null, call: ['D', 'R', 'I'].includes(r.call) ? r.call : null});
-  const arr = x => Array.isArray(x) ? x.filter(isObj) : [];
   const races = [
-    ...arr(d.senate).filter(r => !/^Solid/.test(r.cook || '')).map(r => race('Senate', r.state, r, r.close_ct)),
-    ...arr(d.governors).filter(r => !/^(Solid|Likely)/.test(r.cook || '')).map(r => race('Gov', r.state, r, r.close_ct)),
-    ...arr(d.tx_statewide).filter(r => !['U.S. Senate', 'Governor'].includes(r.office)).map(r => race('TX', r.office, r, '7:00 PM')),
-    ...arr(d.harris).filter(r => !/Senate/.test(r.race || '')).map(r => race('Harris', r.race, r, '7:00 PM'))
+    ...senateRows.filter(r => !/^Solid/.test(r.cook || '')).map(r => race('Senate', r.state, r, r.close_ct)),
+    ...arr(d.governors).filter(r => !/^(Solid|Likely)/.test(r.cook || '')).map(r => race('Gov', r.state, lay(r, `${state(r)} Governor`, r.state, 'Governor'), r.close_ct)),
+    ...arr(d.tx_statewide).filter(r => !['U.S. Senate', 'Governor'].includes(r.office))
+      .map(r => race('TX', r.office, lay(r, `Texas ${String(r.office || '').replace(/^Lt\.\s*/, 'Lieutenant ')}`, 'TX'), '7:00 PM')),
+    ...arr(d.harris).filter(r => !/Senate/.test(r.race || ''))
+      .map(r => race('Harris', r.race, lay(r, `Harris ${/^County\b/.test(r.race || '') ? '' : 'County '}${String(r.race || '').replace(/\bPct\.?/, 'Precinct')}`, 'TX'), '7:00 PM'))
   ];
-  const sen = arr(d.control).find(r => r.chamber === 'Senate') || {}, up = arr(d.senate);
-  const calls = c => up.filter(r => r.call === c).length, called = calls('D') + calls('R') + calls('I');
-  const senate = Number.isFinite(sen.d_not_up) ? {d: sen.d_not_up + calls('D'), r: sen.r_not_up + calls('R'), i: calls('I'), called, pending: up.length - called, majority: sen.majority || 51} : null;
-  const updated = Object.entries(isObj(d.sources) ? d.sources : {}).filter(([k]) => ['control', 'senate', 'governors', 'tx_statewide', 'harris'].includes(k))
-    .map(([, v]) => Date.parse(v?.updated)).filter(Number.isFinite).sort((a, b) => b - a)[0];
-  return {updated: updated ? new Date(updated).toISOString() : null, senate, races};
+  const sen = arr(d.control).find(r => r.chamber === 'Senate') || {};
+  const calls = c => senateRows.filter(r => r.call === c).length, called = calls('D') + calls('R') + calls('I');
+  const senate = Number.isFinite(sen.d_not_up) ? {d: sen.d_not_up + calls('D'), r: sen.r_not_up + calls('R'), i: calls('I'), called, pending: senateRows.length - called, majority: sen.majority || 51} : null;
+  const newest = Math.max(updated, liveAt);
+  return {updated: newest ? new Date(newest).toISOString() : null, liveAt: liveAt ? new Date(liveAt).toISOString() : null, senate, races};
 }
-async function electionData() {
-  if (electionCache.data && Date.now() - electionCache.at < 60000) return electionCache.data;
-  const dir = new URL('data/', config.election.url), out = {};
+
+// civicAPI (civicapi.org): free, no key, every race's count and call as they come in. A few
+// big searches cover all the panel's races; they take half a minute or more on election
+// night, so they run one at a time in the background, only while a panel is showing them.
+const CIVIC = 'https://civicapi.org/api/v2/race/search';
+const CIVIC_SEARCHES = [
+  {election_type: 'General', district: 'null', limit: '200'}, // the U.S. Senate races (federal races with no district)
+  {election_type: 'Statewide', limit: '1500'}, // governors and the other statewide offices
+  {query: 'Harris County', province: 'TX', limit: '100'}];
+let civic = {races: new Map(), ok: 0, error: null, searches: {}}, civicBusy = false, civicNext = 0, electionAsked = 0;
+const electionDay = () => config.election.date || localDay(new Date(Date.parse(`${config.election.until}T12:00:00`) - 864e5));
+async function civicCycle() {
+  if (TESTING || civicBusy || !electionOn() || Date.now() - electionAsked > 10 * 60e3 || Date.now() < civicNext) return;
+  civicBusy = true;
   try {
-    await Promise.all(['control', 'senate', 'governors', 'tx_statewide', 'harris', 'sources'].map(async id => {
-      const r = await fetch(new URL(`${id}.json?v=${Date.now()}`, dir), {signal: AbortSignal.timeout(8000)});
-      if (!r.ok) throw Error(`${id}: ${r.status}`);
-      out[id] = await r.json();
-    }));
-    electionCache = {at: Date.now(), data: {...electionBoard(out), source: dir.hostname, stale: false}};
-  } catch (e) {
-    if (!electionCache.data) throw e;
-    electionCache = {at: Date.now() - 30000, data: {...electionCache.data, stale: true}}; // keep the last good, retry soon
+    const day = electionDay();
+    for (const s of CIVIC_SEARCHES) {
+      const what = s.query || s.election_type, t0 = Date.now();
+      try {
+        const q = new URLSearchParams({country: 'US', ...s, startDate: day, endDate: day});
+        const r = await fetch(`${CIVIC}?${q}`, {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(150e3)});
+        if (!r.ok) throw Error(`civicAPI answered ${r.status}`);
+        const races = (await r.json()).races;
+        civicMerge(civic.races, races, Date.now());
+        civic.ok = Date.now(); civic.error = null;
+        civic.searches[what] = `${Array.isArray(races) ? races.length : 0} races in ${Math.round((Date.now() - t0) / 1000)} s`;
+      } catch (e) {
+        civic.error = e.message; civic.searches[what] = `failed after ${Math.round((Date.now() - t0) / 1000)} s: ${e.message}`;
+        console.error(`civicAPI ${what}: ${e.message}`);
+      }
+    }
+  } finally { civicBusy = false; civicNext = Date.now() + 75e3; }
+}
+setInterval(() => { civicCycle().catch(() => {}); }, 15e3).unref?.();
+
+async function electionData() {
+  electionAsked = Date.now();
+  civicCycle().catch(() => {});
+  const dir = new URL('data/', config.election.url);
+  if (!electionCache.raw || Date.now() - electionCache.at >= 60000) {
+    try {
+      const out = {};
+      await Promise.all(['control', 'senate', 'governors', 'tx_statewide', 'harris', 'sources'].map(async id => {
+        const r = await fetch(new URL(`${id}.json?v=${Date.now()}`, dir), {signal: AbortSignal.timeout(8000)});
+        if (!r.ok) throw Error(`${id}: ${r.status}`);
+        out[id] = await r.json();
+      }));
+      electionCache = {at: Date.now(), raw: out, stale: false};
+    } catch (e) {
+      if (!electionCache.raw) throw e;
+      electionCache = {...electionCache, at: Date.now() - 30000, stale: true}; // keep the last good, retry soon
+    }
   }
-  return electionCache.data;
+  return {...electionBoard(electionCache.raw, [...civic.races.values()]), source: dir.hostname, stale: electionCache.stale,
+    live: {source: 'civicAPI', ok: civic.ok ? new Date(civic.ok).toISOString() : null, error: civic.error, races: civic.races.size, searches: civic.searches}};
 }
 
 // ---------- calm scenes ----------
