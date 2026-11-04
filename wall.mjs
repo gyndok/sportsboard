@@ -122,6 +122,7 @@ const defaultState = () => ({
     {uid: uid(), service: 'sportsboard', link: ''}
   ],
   sidebar: false,
+  panel: 'scores', // what the scores panel shows on election night: scores, election or both
   clean: true,
   cleanPrev: null,
   display: null, // {id, name} of the screen the wall uses; null = the main display
@@ -237,7 +238,8 @@ export async function initWall({port, games}) {
     // Restore field by field: one stale value (say, a pinned scene that was since
     // deleted) is dropped on its own instead of throwing away the whole wall.
     let next = defaultState();
-    for (const key of ['mode', 'layout', 'sidebar', 'clean', 'display', 'slots', 'audio', 'solo']) {
+    if (saved.mode === 'election' && !electionOn()) saved.mode = 'sportsboard'; // election night is over
+    for (const key of ['mode', 'layout', 'sidebar', 'panel', 'clean', 'display', 'slots', 'audio', 'solo']) {
       if (saved[key] === undefined) continue;
       try { next = buildCandidate({[key]: saved[key]}, next); } catch (e) { console.error(`Ignoring saved ${key}: ${e.message}`); }
     }
@@ -623,7 +625,8 @@ function desiredWindows(area) {
     const plan = layoutPlan(state.layout, area, state.sidebar);
     // A black window behind the games hides the desktop and other apps in any spare space.
     want.push({key: 'backdrop', url: `${base}/backdrop`, rect: area});
-    if (plan.scores) want.push({key: 'sidebar', url: `${base}/sidebar`, rect: plan.scores});
+    const show = electionOn() && state.panel !== 'scores' ? `?show=${state.panel}` : ''; // election results in the panel
+    if (plan.scores) want.push({key: 'sidebar', url: `${base}/sidebar${show}`, rect: plan.scores});
     visibleSlots().forEach((s, i) => want.push({key: `slot:${s.uid}`, slot: s, url: resolveUrl(serviceUrl(s)), rect: state.solo === s.uid ? plan.canvas : plan.tiles[i]}));
   } else if (state.mode === 'sportsboard' || state.mode === 'election') {
     // One window for both, so switching between scores and election results is quick.
@@ -850,6 +853,47 @@ async function electionTick() {
 }
 setInterval(() => { electionTick().catch(() => {}); }, 30000).unref?.();
 
+// Election results for the scores panel, from the tracker's own data files (the same
+// races its results table shows), checked at most once a minute.
+let electionCache = {at: 0, data: null};
+const lastName = n => String(n || '').replace(/\([^)]*\)/g, ' ').trim().split(/\s+/).pop() || '';
+const pct = v => Number.isFinite(v) ? Math.round(v * 10) / 10 : null;
+export function electionBoard(d) {
+  const race = (kind, where, r, close) => ({kind, where, close: close || '',
+    d: {name: lastName(r.dem), party: r.other === 'I' ? 'I' : 'D', pct: pct(r.res_d)},
+    r: {name: lastName(r.rep), party: 'R', pct: pct(r.res_r)},
+    reporting: Number.isFinite(r.reporting) ? Math.round(r.reporting) : null, call: ['D', 'R', 'I'].includes(r.call) ? r.call : null});
+  const arr = x => Array.isArray(x) ? x.filter(isObj) : [];
+  const races = [
+    ...arr(d.senate).filter(r => !/^Solid/.test(r.cook || '')).map(r => race('Senate', r.state, r, r.close_ct)),
+    ...arr(d.governors).filter(r => !/^(Solid|Likely)/.test(r.cook || '')).map(r => race('Gov', r.state, r, r.close_ct)),
+    ...arr(d.tx_statewide).filter(r => !['U.S. Senate', 'Governor'].includes(r.office)).map(r => race('TX', r.office, r, '7:00 PM')),
+    ...arr(d.harris).filter(r => !/Senate/.test(r.race || '')).map(r => race('Harris', r.race, r, '7:00 PM'))
+  ];
+  const sen = arr(d.control).find(r => r.chamber === 'Senate') || {}, up = arr(d.senate);
+  const calls = c => up.filter(r => r.call === c).length, called = calls('D') + calls('R') + calls('I');
+  const senate = Number.isFinite(sen.d_not_up) ? {d: sen.d_not_up + calls('D'), r: sen.r_not_up + calls('R'), i: calls('I'), called, pending: up.length - called, majority: sen.majority || 51} : null;
+  const updated = Object.entries(isObj(d.sources) ? d.sources : {}).filter(([k]) => ['control', 'senate', 'governors', 'tx_statewide', 'harris'].includes(k))
+    .map(([, v]) => Date.parse(v?.updated)).filter(Number.isFinite).sort((a, b) => b - a)[0];
+  return {updated: updated ? new Date(updated).toISOString() : null, senate, races};
+}
+async function electionData() {
+  if (electionCache.data && Date.now() - electionCache.at < 60000) return electionCache.data;
+  const dir = new URL('data/', config.election.url), out = {};
+  try {
+    await Promise.all(['control', 'senate', 'governors', 'tx_statewide', 'harris', 'sources'].map(async id => {
+      const r = await fetch(new URL(`${id}.json?v=${Date.now()}`, dir), {signal: AbortSignal.timeout(8000)});
+      if (!r.ok) throw Error(`${id}: ${r.status}`);
+      out[id] = await r.json();
+    }));
+    electionCache = {at: Date.now(), data: {...electionBoard(out), source: dir.hostname, stale: false}};
+  } catch (e) {
+    if (!electionCache.data) throw e;
+    electionCache = {at: Date.now() - 30000, data: {...electionCache.data, stale: true}}; // keep the last good, retry soon
+  }
+  return electionCache.data;
+}
+
 // ---------- calm scenes ----------
 export const sceneCategory = s => s.category || (s.type === 'aerial' ? 'Apple Aerials' : 'My scenes');
 
@@ -977,7 +1021,7 @@ const validUrl = u => { try { const x = new URL(u); return ['http:', 'https:'].i
 
 // Build the complete next state from a change request without touching the live
 // state. Anything invalid throws, so a rejected request changes nothing.
-const PATCH_KEYS = new Set(['mode', 'layout', 'sidebar', 'clean', 'display', 'slots', 'audio', 'solo', 'calm']);
+const PATCH_KEYS = new Set(['mode', 'layout', 'sidebar', 'panel', 'clean', 'display', 'slots', 'audio', 'solo', 'calm']);
 const MODES = ['off', 'grid', 'sportsboard', 'calm', 'election'];
 function buildCandidate(p, from = state) {
   if (!isObj(p)) bad('Expected a JSON object');
@@ -991,6 +1035,7 @@ function buildCandidate(p, from = state) {
   }
   if (p.layout !== undefined) { if (typeof p.layout !== 'string' || !Object.hasOwn(LAYOUTS, p.layout)) bad('Bad layout'); next.layout = p.layout; }
   for (const k of ['sidebar', 'clean']) if (p[k] !== undefined) { if (typeof p[k] !== 'boolean') bad(`${k} must be true or false`); next[k] = p[k]; }
+  if (p.panel !== undefined) { if (!['scores', 'election', 'both'].includes(p.panel)) bad('The panel shows scores, election or both'); next.panel = p.panel; }
   if (p.display !== undefined) {
     const d = p.display;
     if (d === null) next.display = null;
@@ -1044,7 +1089,7 @@ export async function handleWall(req, res, url, port) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   await zoneReady;
   try {
-    const getOnly = p === '/api/wall/audio' || p === '/api/wall/calm' || p.startsWith('/aerial/');
+    const getOnly = p === '/api/wall/audio' || p === '/api/wall/calm' || p === '/api/wall/election' || p.startsWith('/aerial/');
     const allowed = p === '/api/wall' ? ['GET', 'POST'] : getOnly ? ['GET', 'HEAD'] : ['POST'];
     if (!allowed.includes(req.method)) { res.setHeader('Allow', allowed.join(', ')); send(res, 405, {error: 'Method not allowed'}); return true; }
     if (req.method === 'POST') {
@@ -1249,6 +1294,9 @@ export async function handleWall(req, res, url, port) {
       if (!calmBroken.has(scene.id)) console.error(`Calm: "${scene.name.trim()}" (${scene.video}) won't play: YouTube error ${b.code}`);
       calmBroken.set(scene.id, {code: b.code, at: Date.now()});
       send(res, 200, {ok: true});
+    } else if (p === '/api/wall/election') {
+      if (!electionOn()) return send(res, 404, {error: 'Election results are only offered on election night.'}), true;
+      try { send(res, 200, await electionData()); } catch (e) { send(res, 502, {error: `Couldn't load the election results (${e.message}).`}); }
     } else if (p === '/api/wall/calm/stuck' && req.method === 'POST') {
       // The Calm page reports a video that sat paused: whether a nudge or muting got it going,
       // and whether its window was covered (Chrome pauses video it can't see).
