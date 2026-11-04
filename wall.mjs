@@ -922,8 +922,8 @@ export function electionBoard(d, live = null) {
     r: {name: lastName(r.rep), party: 'R', pct: pct(r.res_r)},
     reporting: Number.isFinite(r.reporting) ? Math.round(r.reporting) : null, call: ['D', 'R', 'I'].includes(r.call) ? r.call : null});
   const races = [
-    ...senateRows.filter(r => !/^Solid/.test(r.cook || '')).map(r => race('Senate', r.state, r, r.close_ct)),
-    ...arr(d.governors).filter(r => !/^(Solid|Likely)/.test(r.cook || '')).map(r => race('Gov', r.state, lay(r, `${state(r)} Governor`, r.state, 'Governor'), r.close_ct)),
+    ...senateRows.filter(senateShown).map(r => race('Senate', r.state, r, r.close_ct)),
+    ...arr(d.governors).filter(govShown).map(r => race('Gov', r.state, lay(r, `${state(r)} Governor`, r.state, 'Governor'), r.close_ct)),
     ...arr(d.tx_statewide).filter(r => !['U.S. Senate', 'Governor'].includes(r.office))
       .map(r => race('TX', r.office, lay(r, `Texas ${String(r.office || '').replace(/^Lt\.\s*/, 'Lieutenant ')}`, 'TX'), '7:00 PM')),
     ...arr(d.harris).filter(r => !/Senate/.test(r.race || ''))
@@ -936,28 +936,33 @@ export function electionBoard(d, live = null) {
   return {updated: newest ? new Date(newest).toISOString() : null, liveAt: liveAt ? new Date(liveAt).toISOString() : null, senate, races};
 }
 
-// civicAPI (civicapi.org): free, no key, every race's count and call as they come in. A few
-// big searches cover all the panel's races. On election night each takes half a minute or
-// more and about half fail (502), often instantly, so they run one at a time in the
-// background, only while a panel is showing them: a search that worked runs again in 90 s,
-// one that failed is retried in 20 s, and the panel keeps the races it already has.
+// civicAPI (civicapi.org): free, no key, every race's count and call as they come in. One
+// search covers the U.S. Senate races, one per state the governor and statewide offices
+// (a single nationwide one is too big to get through on election night), one Harris County.
+// Each takes 10–60 s tonight and about half fail (502), often instantly, so they run two at
+// a time in the background (60 s at most each), only while a panel is showing them: a search that worked runs
+// again in 2 minutes, one that failed is retried in 30 s, and the panel keeps what it has.
 const CIVIC = 'https://civicapi.org/api/v2/race/search';
-const CIVIC_SEARCHES = [
-  {what: 'Senate', election_type: 'General', district: 'null', limit: '200'}, // the U.S. Senate races (federal races with no district)
-  {what: 'Statewide', election_type: 'Statewide', limit: '1500'}, // governors and the other statewide offices
-  {what: 'Harris County', query: 'Harris County', province: 'TX', limit: '100'}];
-const CIVIC_AGAIN = 90e3, CIVIC_RETRY = 20e3;
-let civic = {races: new Map(), ok: 0, searches: {}, due: {}, failing: new Set()}, civicBusy = false, electionAsked = 0;
+const CIVIC_AGAIN = 120e3, CIVIC_RETRY = 30e3;
+const senateShown = r => !/^Solid/.test(r.cook || ''), govShown = r => !/^(Solid|Likely)/.test(r.cook || '');
+export function civicSearches(raw = {}) {
+  const arr = x => Array.isArray(x) ? x.filter(isObj) : [];
+  const states = [...new Set([...(arr(raw.tx_statewide).length ? ['TX'] : []), ...arr(raw.governors).filter(govShown).map(r => r.state)])].filter(st => /^[A-Z]{2}$/.test(st || ''));
+  return [{what: 'Senate', election_type: 'General', district: 'null', limit: '200'}, // federal races with no district: the Senate
+    ...states.map(st => ({what: st, province: st, election_type: 'Statewide', limit: '300'})),
+    ...(arr(raw.harris).length ? [{what: 'Harris County', query: 'Harris County', province: 'TX', limit: '100'}] : [])];
+}
+let civic = {races: new Map(), ok: 0, searches: {}, due: {}, failing: new Set(), busy: new Set()}, electionAsked = 0;
 const electionDay = () => config.election.date || localDay(new Date(Date.parse(`${config.election.until}T12:00:00`) - 864e5));
 async function civicCycle() {
-  if (TESTING || civicBusy || !electionOn() || Date.now() - electionAsked > 10 * 60e3) return;
-  const {what, ...s} = CIVIC_SEARCHES.find(x => !(civic.due[x.what] > Date.now())) || {};
+  if (TESTING || civic.busy.size >= 2 || !electionOn() || Date.now() - electionAsked > 10 * 60e3) return; // two at a time, so one stuck search doesn't hold up the rest
+  const {what, ...s} = civicSearches(electionCache.raw || {}).find(x => !civic.busy.has(x.what) && !(civic.due[x.what] > Date.now())) || {};
   if (!what) return;
-  civicBusy = true;
+  civic.busy.add(what);
   const t0 = Date.now(), day = electionDay();
   try {
     const q = new URLSearchParams({country: 'US', ...s, startDate: day, endDate: day});
-    const r = await fetch(`${CIVIC}?${q}`, {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(150e3)});
+    const r = await fetch(`${CIVIC}?${q}`, {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(60e3)});
     if (!r.ok) throw Error(`answered ${r.status}`);
     const races = (await r.json()).races;
     civicMerge(civic.races, races, Date.now());
@@ -969,7 +974,7 @@ async function civicCycle() {
     civic.searches[what] = `failed after ${Math.round((Date.now() - t0) / 1000)} s: ${e.message}`;
     if (!civic.failing.has(what)) console.error(`civicAPI ${what}: ${e.message}; retrying every ${CIVIC_RETRY / 1000} s`);
     civic.failing.add(what);
-  } finally { civicBusy = false; }
+  } finally { civic.busy.delete(what); }
 }
 setInterval(() => { civicCycle().catch(() => {}); }, 5e3).unref?.();
 
